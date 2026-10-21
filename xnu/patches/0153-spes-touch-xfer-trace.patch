@@ -1,0 +1,69 @@
+From 9b6e8f532f498872ff9caf2c52a381d0dff10b73 Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 07:41:21 +0900
+Subject: [PATCH] spes-0153: sweettouchtest bit 16 traces the first I2C
+ transfer register by register
+
+---
+ bsd/dev/sweet_touch.c | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index da1d248..3a07c4f 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -301,16 +301,36 @@ static int
+ touch_msg_run(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
+     unsigned nr, bool stretch)
+ {
++	/* spes: sweettouchtest bit 16 traces every register access of the first transfer */
++	static unsigned traced;
++	bool trace = (touch_test & 16u) && traced++ == 0;
++#define TOUCH_TRACE(what) do { \
++		if (trace) { \
++			printf("SWEET TOUCH: xfer %s\n", what); \
++			touch_wait(300); \
++		} \
++	} while (0)
+ 	if (st.dead || nt > 3 || nr > 90 || (nt && nr) || (!nt && !nr)) {
+ 		return EIO;
+ 	}
++	if (trace) {
++		printf("SWEET TOUCH: xfer start addr=%#x nt=%u nr=%u gpio6 cfg=%#x io=%#x gpio7 cfg=%#x io=%#x\n",
++		    addr, nt, nr, touch_rd(st.west, TOUCH_GPIO_CFG(6)), touch_rd(st.west, TOUCH_GPIO_IO(6)),
++		    touch_rd(st.west, TOUCH_GPIO_CFG(7)), touch_rd(st.west, TOUCH_GPIO_IO(7)));
++		touch_wait(300);
++	}
++	TOUCH_TRACE("read SE_STATUS");
+ 	if (!touch_wait_clear(st.se, SE_STATUS, 1u)) {
+ 		st.dead = true; /* no other SE7 owner is supported */
+ 		return EBUSY;
+ 	}
++	TOUCH_TRACE("write IRQ_CLR");
+ 	touch_wr(st.se, SE_IRQ_CLR, 0xffffffffu);
++	TOUCH_TRACE("write TX_WM");
+ 	touch_wr(st.se, SE_TX_WM, nt ? 1u : 0u);
++	TOUCH_TRACE("write LEN");
+ 	touch_wr(st.se, nr ? SE_RX_LEN : SE_TX_LEN, nr ? nr : nt);
++	TOUCH_TRACE("write CMD (transfer starts)");
+ 	touch_wr(st.se, SE_CMD, ((nr ? 2u : 1u) << 27) |
+ 	    ((uint32_t)addr << 9) | (stretch ? 4u : 0u));
+ 	if (nr > 8 && !st.probing) {
+@@ -318,7 +338,14 @@ touch_msg_run(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
+ 	}
+ 	int err = ETIMEDOUT;
+ 	for (unsigned i = 0; i < 5000; ++i) {
++		if (i < 3) {
++			TOUCH_TRACE("read IRQ status");
++		}
+ 		uint32_t irq = touch_irq();
++		if (trace && i < 3) {
++			printf("SWEET TOUCH: xfer irq=%#x status=%#x tx=%#x rx=%#x\n", irq,
++			    touch_rd(st.se, SE_STATUS), touch_rd(st.se, SE_TX_COUNT), touch_rd(st.se, SE_RX_COUNT));
++		}
+ 		if (irq & SE_ERRORS) {
+ 			err = (irq & SE_NACK) ? ENXIO : EIO;
+ 			/* A completed NACK is normal during address probing. Aborting an
+-- 
+2.52.0.windows.1
+
