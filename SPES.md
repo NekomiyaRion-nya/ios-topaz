@@ -15,7 +15,7 @@ kernel, shim and root image are topaz's with the board differences below.
 | Touch | FocalTech @0x38, QUP0 SE2, IRQ 80, reset 86, AVDD GPIO36 (EAST) | FocalTech `focaltech,fts` @0x38, QUP0 SE2, IRQ 80, reset 86, **AVDD GPIO98 (SOUTH)**, vcc_i2c L9A | patch 0140; raw scale unknown → `sweettouchmode=1` if touches land at 0.8× |
 | Battery | SM5602 0x71 + bq2589x 0x6a on SE1 | **MAX77729 0x66 + SC8551 0x65** on SE1 | not ported: boot with `sweetbattery=0` (static 100 %) |
 | Modem / Wi-Fi | `modem_a`, topaz firmware hash table | A-only (`modem`), different firmware | not ported: leave `modem`/`wifi` unset (off) |
-| DDR | 4 GB map hard-coded (`--highmem`) | unknown until the first boot | default ADT range `0xb0000000+0x4d000000`; the shim prints ABL's `/memory` ranges (`DDR base/size`) — then `mkadt.py --mem BASE:SIZE` |
+| DDR | 4 GB map hard-coded (`--highmem`, `0x1_40000000`+4G) | **4 GB: `0x40000000+0x3dd00000`, `0x80000000+1G`, `0xc0000000+2G`** (ABL `/memory`, 2026-10-21). Nothing at `0x1_40000000` | **`mkadt.py --mem 0x80000000:0xc0000000`** (contiguous 3 GB, below every fixed carve-out ≤ `0x64000000`). Never `--highmem` on spes |
 
 ## First boots
 
@@ -26,3 +26,9 @@ kernel, shim and root image are topaz's with the board differences below.
    `... rd=ufsroot0 ufsrw=1 rootrw=1 cpus=1 sweetbattery=0 sweettouchdiag=1` (add `cpus=4`, drop diag once stable).
 
 Before anything destructive: back up `persist`, `modemst1`, `modemst2`, `fsg`, `fsc` (see RECOVERY.md).
+
+## Observed on the phone
+
+- 2026-10-21, diagnostic shim (`fastboot boot`, boot v3): ABL accepts v3; Silver MIDR `0x51AF8014` (tg16=0),
+  Gold hand-off OK (MIDR `0x411FD090`, MPIDR `0x80000100`, tg16=1), GICv3 SGI/vtimer OK on Gold,
+  GICR for `0x101`–`0x103` prepared, Gold cpufreq 0x960 = 2400 (as topaz), initrd `0x4548e000`, DDR as above.
