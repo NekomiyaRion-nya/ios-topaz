@@ -99,11 +99,15 @@ done
 # and mode, plus a .migrated marker, else asks a helper and crashes
 # ("BUG IN LIBTRACE: Failed to migrate directory").
 db="$work/root/private/var/db"
-sudo install -d -o 272 -g 272 -m 0751 "$db/diagnostics"
-sudo install -d -o 272 -g 272 -m 0755 "$db/uuidtext" "$db/diagnostics/timesync"
+# (mkdir/chown/chmod, not install -o 272: uutils install rejects unknown numeric owners)
+sudo mkdir -p "$db/diagnostics/timesync" "$db/uuidtext"
+sudo chmod 0751 "$db/diagnostics"
+sudo chmod 0755 "$db/uuidtext" "$db/diagnostics/timesync"
 for d in diagnostics uuidtext diagnostics/timesync; do
-	sudo install -o 272 -g 272 -m 0644 /dev/null "$db/$d/.migrated"
+	sudo touch "$db/$d/.migrated"
+	sudo chmod 0644 "$db/$d/.migrated"
 done
+sudo chown 272:272 "$db/diagnostics" "$db/uuidtext" "$db/diagnostics/timesync" 	"$db/diagnostics/.migrated" "$db/uuidtext/.migrated" "$db/diagnostics/timesync/.migrated"
 
 # System keybag for the built-in AppleKeyStore (no passcode).
 sudo install -d -m 0700 -o 0 -g 0 "$work/root/private/var/keybags"
