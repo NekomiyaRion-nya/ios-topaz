@@ -15,12 +15,14 @@ winpath() { cygpath -w "$1"; }
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 in_fastboot() { "$FB" devices 2>/dev/null | grep -q "$SERIAL"; }
 in_recovery() { "$ADB" devices 2>/dev/null | grep -q -E "$SERIAL\s+recovery"; }
-wait_for() {  # cond seconds
-	local t=0
-	until $1; do sleep 3; t=$((t + 3)); [ $t -ge "$2" ] && return 1; done
+wait_for() {  # cond seconds (wall clock)
+	local end=$((SECONDS + $2))
+	until $1; do sleep 3; [ $SECONDS -ge $end ] && return 1; done
+	return 0
 }
 
 wait_for in_fastboot 180 || { log "phone not in fastboot"; exit 2; }
+if [ "$IMG" != - ]; then   # IMAGE "-": only pull the log of the last run
 log "booting $IMG"
 "$FB" boot "$(winpath "$IMG")" 2>&1 | tail -1
 sleep 20   # leave fastboot before polling for its return
@@ -28,6 +30,7 @@ log "waiting up to ${MAX}s for the automatic reset into fastboot"
 if ! wait_for in_fastboot "$MAX"; then
 	log "no reset within ${MAX}s: hung? hold Power + Vol-down, then rerun with the pull step"
 	exit 3
+fi
 fi
 log "back in fastboot; booting OrangeFox"
 "$FB" boot "$RECOVERY" 2>&1 | tail -1

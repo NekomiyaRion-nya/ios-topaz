@@ -12,8 +12,8 @@ kernel, shim and root image are topaz's with the board differences below.
 | GIC / UFS / PS_HOLD / IMEM | `0xf200000` / `0x4804000` / `0x440b000` / `0xc125000` | same | — |
 | Splash framebuffer | `0x5c000000` + `0xf00000` | same | — |
 | Panel | 1080×2400 DSI video, DSC | 1080×2400 OLED DSI video, DSC (K7 `38 0c 0a`/`0b`, NT36672E variants) | as topaz; brightness/DCS (0104–0106) unverified |
-| Touch | FocalTech @0x38, QUP0 SE2, IRQ 80, reset 86, AVDD GPIO36 (EAST) | FocalTech `focaltech,fts` @0x38, QUP0 SE2, IRQ 80, reset 86, **AVDD GPIO98 (SOUTH)**, vcc_i2c L9A | patch 0140; raw scale unknown → `sweettouchmode=1` if touches land at 0.8× |
-| Battery | SM5602 0x71 + bq2589x 0x6a on SE1 | **MAX77729 0x66 + SC8551 0x65** on SE1 | not ported: boot with `sweetbattery=0` (static 100 %) |
+| Touch | FT5452 (id 54:52) @0x38, QUP0 SE2, IRQ 80, reset 86, AVDD GPIO36 (EAST), raw 1.25× | **FT3418 (id 34:18, Xiaomi `ft3418_i2c`)** @0x38, QUP0 SE2, IRQ 80, reset 86, **AVDD GPIO98 (SOUTH)**, vcc_i2c L9A 1.8 V, raw = panel pixels | 0140 (pins), 0141 (step log), 0147 (FT3418 id, unscaled). Bring-up still hangs the SoC (open) |
+| Battery | SM5602 0x71 + bq2589x 0x6a on SE1 | **MAX77729** (PMIC 0x66, fuel gauge 0x36, charger 0x69) + SC8551 0x65 on SE1 | 0146 (`pollSpes`, untested); boot images keep `sweetbattery=0` until SE1 access is proven safe |
 | Modem / Wi-Fi | `modem_a`, topaz firmware hash table | A-only (`modem`), different firmware | not ported: leave `modem`/`wifi` unset (off) |
 | DDR | 4 GB map hard-coded (`--highmem`, `0x1_40000000`+4G) | **4 GB: `0x40000000+0x3dd00000`, `0x80000000+1G`, `0xc0000000+2G`** (ABL `/memory`, 2026-10-21). Nothing at `0x1_40000000` | **`mkadt.py --mem 0x80000000:0xc0000000`** (contiguous 3 GB, below every fixed carve-out ≤ `0x64000000`). Never `--highmem` on spes |
 
@@ -46,3 +46,18 @@ Before anything destructive: back up `persist`, `modemst1`, `modemst2`, `fsg`, `
 `tools/spes-cycle.sh IMAGE NAME` (Git Bash on the PC, phone in fastboot): boots IMAGE, the kernel resets into fastboot after
 `sweetautoreboot` seconds (0142, flushed log first), then OrangeFox is booted and the log is pulled to `logs/NAME.txt`.
 Symbolicate samples with `tools/a2s.sh SLIDE ADDR...`, disassemble with `tools/disass.sh VADDR` (inside WSL, as root).
+
+## Kernel patches (spes)
+
+| Patch | What |
+| --- | --- |
+| 0140 | Touch AVDD on GPIO98 (SOUTH tile), `sweettouchmode` |
+| 0141 | `sweettouchstep=MS`: log each touch bring-up step and wait |
+| 0142 | `sweetautoreboot=SECS`: flush the log, reset into fastboot |
+| 0143 | PMIC writes over SPMI; reboot reason BOOTLOADER (PON SOFT_RB_SPARE 0x88F) + warm PS_HOLD reset (needed: the IMEM reason alone is ignored and Android boots and **wipes userdata**) |
+| 0144 | `sweetautoreboot` uses 0143 |
+| 0145 | `sweethwwdt=SECS`: APSS watchdog (0xf017000) petted every second; a hang bites into fastboot |
+| 0146 | MAX77729 battery readout |
+| 0147 | FT3418 touch IC |
+
+boot_a/boot_b hold `spes-boot.img` (the iOS shim) since 2026-10-22, so a normal boot never reaches Android again.

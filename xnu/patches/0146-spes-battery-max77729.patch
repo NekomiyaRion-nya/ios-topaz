@@ -1,0 +1,81 @@
+From 99cd67fa00e17965d6edabefbd62c666c5a4b3fd Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 02:03:57 +0900
+Subject: [PATCH] spes-0146: MAX77729 fuel gauge (0x36) and charger (0x69)
+ battery readout
+
+---
+ iokit/Kernel/arm/SweetBattery.cpp | 47 ++++++++++++++++++++++++++++++-
+ 1 file changed, 46 insertions(+), 1 deletion(-)
+
+diff --git a/iokit/Kernel/arm/SweetBattery.cpp b/iokit/Kernel/arm/SweetBattery.cpp
+index 824c022..50abe2f 100644
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -38,6 +38,7 @@ private:
+ 	    bool capable, bool charging, bool full, bool measured, bool currentValid);
+ 	void poll(void);
+ 	bool pollTopaz(void);
++	bool pollSpes(void);
+ 	static void timerFired(OSObject *owner, IOTimerEventSource *sender);
+ 	static IOReturn stopPolling(OSObject *owner, void *, void *, void *, void *);
+ 	static bool readWord(unsigned address, uint16_t *value);
+@@ -257,10 +258,54 @@ SweetBattery::pollTopaz(void)
+ 	return true;
+ }
+ 
++/*
++ * spes (Redmi Note 11): MAX77729 on QUP0 SE1 (dtbo "maxim,max77729" @0x66).
++ * Its ModelGauge m5 fuel gauge answers at 0x36 (16-bit little-endian words):
++ * RepSOC 0x06 (1/256 %), VCell 0x09 (78.125 uV), Current 0x0A (signed,
++ * 1.5625 uV / Rsense; dtbo fg_resistor = 2 -> 5 mOhm -> 0.3125 mA, positive
++ * = charging), FullCapRep 0x10 (5 uVh / Rsense = 1 mAh). Charger at 0x69:
++ * CHG_INT_OK 0xB2 bit 6 CHGIN_OK, CHG_DETAILS_01 0xB4 bits 3:0 state
++ * (0-3 charging, 4 done), as in the MAX77705-family drivers. Read-only.
++ */
++bool
++SweetBattery::pollSpes(void)
++{
++	uint8_t w[2], ok = 0, details = 0;
++	if (sweet_i2c1_read(0x36, 0x06, w, 2)) {
++		return false;
++	}
++	unsigned percent = (unsigned)w[1];
++	if (sweet_i2c1_read(0x36, 0x09, w, 2)) {
++		return false;
++	}
++	unsigned mv = (unsigned)(w[0] | w[1] << 8) * 5u / 64u;
++	if (sweet_i2c1_read(0x36, 0x0a, w, 2)) {
++		return false;
++	}
++	int ma = (int)(int16_t)(w[0] | w[1] << 8) * 5 / 16;
++	unsigned fullMah = sweet_i2c1_read(0x36, 0x10, w, 2) ? 0 : (unsigned)(w[0] | w[1] << 8);
++	if (percent > 100 || mv < 2800 || mv > 4600) {
++		return false;
++	}
++	bool chgOk = sweet_i2c1_read(0x69, 0xb2, &ok, 1) == 0 &&
++	    sweet_i2c1_read(0x69, 0xb4, &details, 1) == 0;
++	unsigned state = details & 0x0fu;
++	bool external = chgOk ? (ok & 0x40u) != 0 : ma > 50;
++	bool charging = external && (chgOk ? state <= 3 : ma > 50);
++	bool done = external && ((chgOk && state == 4) || percent >= 100);
++	publish(done ? 100 : percent, mv, ma, external, external, charging, done, true, true);
++	static unsigned logs;
++	if (logs++ % 20 == 0) {
++		IOLog("SWEET BATTERY: spes %u%% %umV %dmA full=%umAh chg-ok=%#x details=%#x (%d) external=%d charging=%d\n",
++		    percent, mv, ma, fullMah, ok, details, chgOk, external, charging);
++	}
++	return true;
++}
++
+ void
+ SweetBattery::poll(void)
+ {
+-	if (fReal && pollTopaz()) {
++	if (fReal && (pollSpes() || pollTopaz())) {
+ 		return;
+ 	}
+ 	if (fReal) {
+-- 
+2.52.0.windows.1
+
