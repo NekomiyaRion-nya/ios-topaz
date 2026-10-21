@@ -1,0 +1,54 @@
+From 2a666294c432aeb5f5e5c623205f7db854615435 Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 08:52:44 +0900
+Subject: [PATCH] spes-0159: UDP 'SWEET-FASTBOOT' on port 5141 over USB
+ Ethernet reboots into fastboot
+
+---
+ bsd/dev/sweet_usb.c | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index 412db02..abc5c7a 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -38,6 +38,7 @@ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ void sweet_usb_probe(void);
+ static void sweet_usb_gadget_start(vm_offset_t dwc);
+ extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
++extern void sweet_request_fastboot(void);        /* bsd/dev/sweet_ufs.c */
+ 
+ #define GCC_PA                  0x01400000      /* spes: gcc@1400000 (SM7150 had 0x100000) */
+ #define GCC_SIZE                0x000a0000
+@@ -487,6 +488,28 @@ ud_rx_done(void)
+ 	ud_sync(UD_TRB_RX, 16);
+ 	uint32_t len = UD_FRAME_MAX - (t[2] & 0xffffff);
+ 	ud_sync(UD_RX, UD_FRAME_MAX);
++	/*
++	 * spes: a UDP datagram to port 5141 starting with "SWEET-FASTBOOT"
++	 * (IPv4, any address) asks for a reboot into fastboot, so the PC never
++	 * has to leave the phone idling in ABL fastboot (its USB drops out).
++	 */
++	if (len >= 14 + 20 + 8 + 14) {
++		const volatile uint8_t *f = (const volatile uint8_t *)(ud.dma + UD_RX);
++		unsigned ihl = (f[14] & 0x0fu) * 4u;
++		static const char magic[] = "SWEET-FASTBOOT";
++		if (f[12] == 0x08 && f[13] == 0x00 && f[23] == 17 && ihl >= 20 &&
++		    len >= 14 + ihl + 8 + sizeof(magic) - 1 &&
++		    f[14 + ihl + 2] == (5141 >> 8) && f[14 + ihl + 3] == (5141 & 0xff)) {
++			bool match = true;
++			for (unsigned i = 0; i < sizeof(magic) - 1; i++) {
++				match = match && f[14 + ihl + 8 + i] == (uint8_t)magic[i];
++			}
++			if (match) {
++				printf("SWEET USB: fastboot requested by the PC\n");
++				sweet_request_fastboot();
++			}
++		}
++	}
+ 	if (ud.ifp != NULL && len >= ETHER_HDR_LEN && len <= ETHER_MAX_LEN) {
+ 		/*
+ 		 * One mbuf with a 2 KiB cluster holds any frame. (mbuf_allocpacket
+-- 
+2.52.0.windows.1
+

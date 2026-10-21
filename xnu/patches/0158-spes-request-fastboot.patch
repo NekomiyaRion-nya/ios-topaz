@@ -1,0 +1,38 @@
+From c0757d50a45114f5606d99f318d37aa595815d4d Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 08:52:44 +0900
+Subject: [PATCH] spes-0158: sweet_request_fastboot() (reboot into fastboot on
+ request)
+
+---
+ bsd/dev/sweet_ufs.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 8632088..37eb452 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -868,6 +868,20 @@ static uint32_t sweet_log_secs = SWEET_LOG_SECS;
+ static uint64_t sweet_reboot_at;
+ extern bool sweet_pmic_reboot_bootloader(void);  /* bsd/dev/sweet_keys.c */
+ 
++/*
++ * spes: reboot into fastboot on request (sweet_usb.c sees the PC's UDP
++ * "SWEET-FASTBOOT" on port 5141). Any context: it only arms the deadline and
++ * wakes the log thread, which flushes the log and resets as for
++ * sweetautoreboot.
++ */
++void sweet_request_fastboot(void);
++void
++sweet_request_fastboot(void)
++{
++	sweet_reboot_at = mach_absolute_time();
++	wakeup(&sweet_log_chan);
++}
++
+ static void
+ sweet_reboot_check(void)
+ {
+-- 
+2.52.0.windows.1
+

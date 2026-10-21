@@ -29,7 +29,14 @@ wait_for() {  # cond seconds (wall clock)
 	return 0
 }
 
-wait_for in_fastboot 180 || { log "phone not in fastboot"; exit 2; }
+request_fastboot() {  # iOS parked with USB Ethernet up (kernel 0158/0159): ask it to reboot into fastboot
+	MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -u root -- bash /mnt/c/Users/matsu/Documents/hackinOS/tools/phone-fastboot.sh >/dev/null 2>&1
+}
+if ! wait_for in_fastboot 15; then
+	log "not in fastboot: asking iOS over USB Ethernet"
+	request_fastboot
+	wait_for in_fastboot 180 || { log "phone not in fastboot"; exit 2; }
+fi
 if [ "$IMG" != - ]; then   # IMAGE "-": only pull the log of the last run
 log "booting $IMG"
 fb_retry boot "$(winpath "$IMG")" || { log "fastboot cannot reach the phone (USB link)"; exit 5; }
@@ -51,4 +58,9 @@ MSYS_NO_PATHCONV=1 "$ADB" -s $SERIAL exec-out "dd if=$dev bs=4096 skip=$skip cou
 python "$HACK/ios-spes/tools/sweet-log.py" "$HACK/logs/$NAME.bin" "$HACK/logs/$NAME.txt" | tail -1
 log "log: logs/$NAME.txt ($(wc -l < "$HACK/logs/$NAME.txt") lines)"
 "$ADB" -s $SERIAL reboot bootloader
-wait_for in_fastboot 60 && log "phone back in fastboot, ready for the next cycle"
+wait_for in_fastboot 60 && log "phone back in fastboot"
+# Park in iOS (boot partition image, USB Ethernet up) instead of idling in ABL fastboot,
+# whose USB drops out after a few idle minutes. The next cycle asks for fastboot over UDP.
+if [ "${PARK:-1}" = 1 ]; then
+	fb_retry reboot >/dev/null && log "parked in iOS (boot partition)"
+fi
