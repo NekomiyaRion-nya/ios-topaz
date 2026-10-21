@@ -1,0 +1,46 @@
+From eabc7b0dd711feff0c77e689d0d24077175066c7 Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 07:53:09 +0900
+Subject: [PATCH] spes-0154: log SE2's GIC interrupt (INTID 361) and optionally
+ disable it before the first transfer
+
+---
+ bsd/dev/sweet_touch.c | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 3a07c4f..fe6f4a8 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -319,6 +319,28 @@ touch_msg_run(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
+ 		    touch_rd(st.west, TOUCH_GPIO_CFG(7)), touch_rd(st.west, TOUCH_GPIO_IO(7)));
+ 		touch_wait(300);
+ 	}
++	/*
++	 * spes: SE2's interrupt is GIC SPI 0x149 (INTID 361). sweettouchtest bit
++	 * 32 logs its distributor state and disables it before the transfer, to
++	 * test whether the transfer-done interrupt is what takes the SoC down.
++	 */
++	if (trace) {
++		vm_offset_t gicd = ml_io_map(0x0f200000u, 0x10000);
++		if (gicd) {
++			uint32_t bit = 1u << (361u % 32u), word = 4u * (361u / 32u);
++			printf("SWEET TOUCH: gic 361 group=%u enabled=%u pending=%u active=%u route=%#llx cfg=%#x\n",
++			    !!(touch_rd(gicd, 0x080u + word) & bit), !!(touch_rd(gicd, 0x100u + word) & bit),
++			    !!(touch_rd(gicd, 0x200u + word) & bit), !!(touch_rd(gicd, 0x300u + word) & bit),
++			    (unsigned long long)*(volatile uint64_t *)(gicd + 0x6000u + 8u * 361u),
++			    touch_rd(gicd, 0xc00u + 4u * (361u / 16u)));
++			if (touch_test & 32u) {
++				touch_wr(gicd, 0x180u + word, bit);     /* GICD_ICENABLER */
++				printf("SWEET TOUCH: gic 361 disabled, enabled now=%u\n",
++				    !!(touch_rd(gicd, 0x100u + word) & bit));
++			}
++		}
++		touch_wait(300);
++	}
+ 	TOUCH_TRACE("read SE_STATUS");
+ 	if (!touch_wait_clear(st.se, SE_STATUS, 1u)) {
+ 		st.dead = true; /* no other SE7 owner is supported */
+-- 
+2.52.0.windows.1
+
