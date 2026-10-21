@@ -1,18 +1,18 @@
-From 254fd9e52f7540a2d080df026ac612ab05cd1e70 Mon Sep 17 00:00:00 2001
+From 49a2521ac8e41d0c659ce9fb836b439343c43fde Mon Sep 17 00:00:00 2001
 From: matsu <covocovo893@gmail.com>
 Date: Wed, 21 Oct 2026 23:50:42 +0900
 Subject: [PATCH] spes-0141: sweettouchstep=MS logs each touch bring-up step
  and waits
 
 ---
- bsd/dev/sweet_touch.c | 37 +++++++++++++++++++++++++++++++------
- 1 file changed, 31 insertions(+), 6 deletions(-)
+ bsd/dev/sweet_touch.c | 36 ++++++++++++++++++++++++++++++------
+ 1 file changed, 30 insertions(+), 6 deletions(-)
 
 diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
-index 956fe86..4504848 100644
+index 956fe86..5c0ca4b 100644
 --- a/bsd/dev/sweet_touch.c
 +++ b/bsd/dev/sweet_touch.c
-@@ -127,6 +127,24 @@ touch_wait(unsigned ms)
+@@ -127,6 +127,23 @@ touch_wait(unsigned ms)
  	thread_block(THREAD_CONTINUE_NULL);
  }
  
@@ -28,8 +28,7 @@ index 956fe86..4504848 100644
 +{
 +	st.stage = name;
 +	if (touch_step_ms) {
-+		printf("SWEET TOUCH: step %s
-+", name);
++		printf("SWEET TOUCH: step %s\n", name);
 +		touch_wait(touch_step_ms);
 +	}
 +}
@@ -37,7 +36,7 @@ index 956fe86..4504848 100644
  static bool
  touch_wait_clear(vm_offset_t base, uint32_t off, uint32_t mask)
  {
-@@ -170,11 +188,14 @@ touch_clocks(void)
+@@ -170,11 +187,14 @@ touch_clocks(void)
  	 * shared vote register (other bits belong to other clients), XO parent
  	 * with divider 1 = 19.2 MHz, no PLL or voltage change.
  	 */
@@ -52,7 +51,7 @@ index 956fe86..4504848 100644
  	touch_wr(st.gcc, TOUCH_RCG + 4u, 1u);
  	touch_wr(st.gcc, TOUCH_RCG, touch_rd(st.gcc, TOUCH_RCG) | 1u);
  	if (!touch_wait_clear(st.gcc, TOUCH_RCG, 1u)) {
-@@ -634,9 +655,10 @@ touch_thread(void *arg, wait_result_t result)
+@@ -634,9 +654,10 @@ touch_thread(void *arg, wait_result_t result)
  	 */
  	(void)PE_parse_boot_argn("sweettouchdelay", &delay_s, sizeof(delay_s));
  	(void)PE_parse_boot_argn("sweettouchmode", &touch_mode, sizeof(touch_mode));
@@ -64,7 +63,7 @@ index 956fe86..4504848 100644
  	printf("SWEET TOUCH: mapping GCC/TLMM/SE2\n");
  	st.gcc = ml_io_map(TOUCH_GCC_PA, 0x80000);
  	st.west = ml_io_map(TOUCH_WEST_PA, 0x58000);
-@@ -646,29 +668,32 @@ touch_thread(void *arg, wait_result_t result)
+@@ -646,29 +667,32 @@ touch_thread(void *arg, wait_result_t result)
  		printf("SWEET TOUCH: MMIO mapping failed\n");
  		goto out;
  	}
@@ -101,7 +100,7 @@ index 956fe86..4504848 100644
  	uint8_t gid[32], legacy[32], fid1 = 0, fid2 = 0;
  	st.probing = true;
  	int ge = touch_probe_info(GOODIX_PID_REG, gid);
-@@ -703,7 +728,7 @@ touch_thread(void *arg, wait_result_t result)
+@@ -703,7 +727,7 @@ touch_thread(void *arg, wait_result_t result)
  		goto out;
  	}
  	st.kind = goodix ? TOUCH_GOODIX : TOUCH_FTS;
