@@ -13,7 +13,7 @@ kernel, shim and root image are topaz's with the board differences below.
 | Splash framebuffer | `0x5c000000` + `0xf00000` | same | — |
 | Panel | 1080×2400 DSI video, DSC | 1080×2400 OLED DSI video, DSC (K7 `38 0c 0a`/`0b`, NT36672E variants) | as topaz; brightness/DCS (0104–0106) unverified |
 | Touch | FT5452 (id 54:52) @0x38, QUP0 SE2, IRQ 80, reset 86, AVDD GPIO36 (EAST), raw 1.25× | **FT3418 (id 34:18, Xiaomi `ft3418_i2c`)** @0x38, QUP0 SE2, IRQ 80, reset 86, **AVDD GPIO98 (SOUTH)**, vcc_i2c L9A 1.8 V, raw = panel pixels | 0140 (pins), 0141 (step log), 0147 (FT3418 id, unscaled). Bring-up still hangs the SoC (open) |
-| Battery | SM5602 0x71 + bq2589x 0x6a on SE1 | **MAX77729** (PMIC 0x66, fuel gauge 0x36, charger 0x69) + SC8551 0x65 on SE1 | 0146 (`pollSpes`, untested); boot images keep `sweetbattery=0` until SE1 access is proven safe |
+| Battery | SM5602 0x71 + bq2589x 0x6a on SE1 | **MAX77729** (PMIC 0x66, fuel gauge 0x36, charger 0x69) + SC8551 0x65 on SE1 | **This phone answers on topaz's SM5602 0x71 + bq2589x 0x6a** (2026-10-22: 100 %, 4424 mV, full 4849 mAh); the MAX77729 node is another board variant. `pollSpes` (0146) tries MAX77729 first, then topaz. Battery on by default |
 | Modem / Wi-Fi | `modem_a`, topaz firmware hash table | A-only (`modem`), different firmware | not ported: leave `modem`/`wifi` unset (off) |
 | DDR | 4 GB map hard-coded (`--highmem`, `0x1_40000000`+4G) | **4 GB: `0x40000000+0x3dd00000`, `0x80000000+1G`, `0xc0000000+2G`** (ABL `/memory`, 2026-10-21). Nothing at `0x1_40000000` | **`mkadt.py --mem 0x80000000:0xc0000000`** (contiguous 3 GB, below every fixed carve-out ≤ `0x64000000`). Never `--highmem` on spes |
 
@@ -61,3 +61,6 @@ Symbolicate samples with `tools/a2s.sh SLIDE ADDR...`, disassemble with `tools/d
 | 0147 | FT3418 touch IC |
 
 boot_a/boot_b hold `spes-boot.img` (the iOS shim) since 2026-10-22, so a normal boot never reaches Android again.
+- 2026-10-22: USB works (0148-0150): `ue0` 192.168.7.2 up, Windows enumerates "Sweet iOS (USB Ethernet)" (1209:0001).
+  Host side: usbipd-win (AutoBind policy for 1209:0001) + `tools/usb-attach.sh` (Git Bash) + `tools/livelog.sh` (WSL root)
+  -> `logs/live.txt`. Touch hangs at the first I2C transfer ("step probe"); 0151 dumps the SE2 DFS table and picks an XO level.
