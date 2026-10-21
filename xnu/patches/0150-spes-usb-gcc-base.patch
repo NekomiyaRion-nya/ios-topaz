@@ -1,0 +1,28 @@
+From 0855c0d926e70d8a7d85ca3bf4cc9f65faad4625 Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 06:38:37 +0900
+Subject: [PATCH] spes-0150: USB probe uses the khaje GCC base (0x1400000); the
+ SM7150 one hung the boot
+
+---
+ bsd/dev/sweet_usb.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index a775198..412db02 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -39,8 +39,8 @@ void sweet_usb_probe(void);
+ static void sweet_usb_gadget_start(vm_offset_t dwc);
+ extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
+ 
+-#define GCC_PA                  0x00100000
+-#define GCC_SIZE                0x00090000
++#define GCC_PA                  0x01400000      /* spes: gcc@1400000 (SM7150 had 0x100000) */
++#define GCC_SIZE                0x000a0000
+ #define GCC_USB30_PRIM_GDSCR    0x1a004         /* bit 31: power on (spes: gcc-sm6115.c) */
+ #define CBCR_CLK_OFF            (1u << 31)
+ 
+-- 
+2.52.0.windows.1
+
