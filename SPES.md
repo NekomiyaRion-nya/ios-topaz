@@ -32,3 +32,17 @@ Before anything destructive: back up `persist`, `modemst1`, `modemst2`, `fsg`, `
 - 2026-10-21, diagnostic shim (`fastboot boot`, boot v3): ABL accepts v3; Silver MIDR `0x51AF8014` (tg16=0),
   Gold hand-off OK (MIDR `0x411FD090`, MPIDR `0x80000100`, tg16=1), GICv3 SGI/vtimer OK on Gold,
   GICR for `0x101`–`0x103` prepared, Gold cpufreq 0x960 = 2400 (as topaz), initrd `0x4548e000`, DDR as above.
+- 2026-10-21, first iOS boots (root image flashed to `userdata`, debug image): kernel, UFS root, display (60 Hz),
+  launchd, SpringBoard, backboardd all start; Apple logo stays.
+  - **Touch bring-up freezes the whole SoC** about 45 s in (log stops; `sweettouch=0` runs for 10+ min, keys reach HID).
+    Under investigation with `spes-touchstep.img` (0141 `sweettouchstep`). Suspects: L9A (touch vcc_i2c) off on spes, AVDD GPIO98.
+  - **Apple logo forever = MobileGestalt waiting for Wi-Fi**: SpringBoard waits in `_LSContextInitCommon`, lsd in
+    `GenerateBuiltInAppInstallSessionID` -> libMobileGestalt MGIOKitSupport: no `/chosen/mac-address-wifi0`, the ADT has a
+    `wlan` node, so it waits forever for an `IONetworkController` (Wi-Fi is off on spes). Fix: mkadt adds synthetic
+    `mac-address-wifi0`/`mac-address-bluetooth0`.
+
+## Unattended test loop
+
+`tools/spes-cycle.sh IMAGE NAME` (Git Bash on the PC, phone in fastboot): boots IMAGE, the kernel resets into fastboot after
+`sweetautoreboot` seconds (0142, flushed log first), then OrangeFox is booted and the log is pulled to `logs/NAME.txt`.
+Symbolicate samples with `tools/a2s.sh SLIDE ADDR...`, disassemble with `tools/disass.sh VADDR` (inside WSL, as root).

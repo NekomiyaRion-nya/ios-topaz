@@ -116,6 +116,13 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False, mem=
         # of the A11 that the iPhone X userland expects.
         ('unique-chip-id', struct.pack('<Q', SWEET_ECID)),
         ('chip-id', u32(0x8015)),
+        # spes: iBoot normally puts the radio MACs here. Without them
+        # MobileGestalt's Wi-Fi address answer (MGIOKitSupport) sees the "wlan"
+        # node and waits forever for an IONetworkController; with Wi-Fi off
+        # that blocked lsd (GenerateBuiltInAppInstallSessionID) and so
+        # SpringBoard on the Apple logo. Synthetic, locally administered.
+        ('mac-address-wifi0', bytes([0x02, 0x53, 0x50, 0x45, 0x53, 0x01])),
+        ('mac-address-bluetooth0', bytes([0x02, 0x53, 0x50, 0x45, 0x53, 0x02])),
         # Security status as on a dev-fused, undemoted board (tuple 0,0,1,1):
         # MobileGestalt reads these from /chosen, and mobileactivationd's
         # DeviceType then takes its native "Hactivation" branch (state
