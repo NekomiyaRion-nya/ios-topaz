@@ -1,0 +1,47 @@
+From 824cd23f5072929ea5b755bda8a90f449faa9a16 Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 08:05:30 +0900
+Subject: [PATCH] spes-0155: sweettouchtest bit 64 leaves SE2 alone after the
+ command
+
+---
+ bsd/dev/sweet_touch.c | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index fe6f4a8..973be3b 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -358,6 +358,29 @@ touch_msg_run(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
+ 	if (nr > 8 && !st.probing) {
+ 		touch_wait(2); /* sleep, do not spin, through most of the transfer */
+ 	}
++	/*
++	 * spes: sweettouchtest bit 64 leaves SE2 alone for 2 s after the command
++	 * (TX FIFO filled blind) to tell "the transfer itself kills the SoC" from
++	 * "touching SE2 afterwards does".
++	 */
++	if (trace && (touch_test & 64u)) {
++		if (nt) {
++			uint32_t word = 0;
++			for (unsigned j = 0; j < nt; ++j) {
++				word |= (uint32_t)tx[j] << (8u * j);
++			}
++			touch_wr(st.se, SE_TX, word);
++			st.sent = nt;
++			touch_wr(st.se, SE_TX_WM, 0);
++			printf("SWEET TOUCH: xfer TX FIFO written, now hands off SE2\n");
++		}
++		for (unsigned k = 1; k <= 10; ++k) {
++			touch_wait(200);
++			printf("SWEET TOUCH: xfer alive %u ms after the command\n", k * 200u);
++		}
++		printf("SWEET TOUCH: xfer reading SE2 again\n");
++		touch_wait(300);
++	}
+ 	int err = ETIMEDOUT;
+ 	for (unsigned i = 0; i < 5000; ++i) {
+ 		if (i < 3) {
+-- 
+2.52.0.windows.1
+
