@@ -2,6 +2,8 @@
 # spes: ADT (3 GB at 0x80000000) + payload + shim boot.img v3, in two flavours:
 #   shim/out/spes-debug.img  kernel console drawn on screen (slow, for the first boots)
 #   shim/out/spes-boot.img   console off once iOS draws (normal use)
+#   shim/out/spes-notouch.img debug, touch driver off (isolates touch bring-up hangs)
+#   shim/out/spes-touchstep.img debug, touch steps logged 1.5 s apart, log flushed every 1 s
 set -euo pipefail
 cd "$(dirname "$0")/.."
 K=xnu/out/kernel.development.sweet
@@ -14,5 +16,7 @@ build() {  # name cmdline
 	cp shim/out/shim-boot.img shim/out/spes-$1.img
 }
 build debug "$COMMON"
+build notouch "$COMMON sweettouch=0 sweetsample=SpringBoard,lsd,backboardd"
+build touchstep "$COMMON ufslogsecs=1 sweettouchstep=1500 sweettouchdelay=20"
 build boot "$COMMON sweetfb_noconsole=1"
 ls -l shim/out/spes-*.img
