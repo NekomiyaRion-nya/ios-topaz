@@ -26,6 +26,10 @@ for job in "$@"; do
 	rc=$?
 	kill $usbpid 2>/dev/null
 	log "$name finished rc=$rc"
+	if [ $rc -eq 5 ]; then
+		log "USB link to fastboot is broken: stopping (replug / restart fastboot)"
+		exit 5
+	fi
 	if [ $rc -eq 3 ]; then
 		log "phone did not come back: stopping the queue (needs Power + Vol-down)"
 		exit 3

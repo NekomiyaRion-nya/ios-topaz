@@ -12,6 +12,14 @@ PT=/c/Users/matsu/Documents/rom/platform-tools
 FB=$PT/fastboot.exe ADB=$PT/adb.exe SERIAL=14e0ddb2
 RECOVERY='C:\Users\matsu\Documents\rom\platform-tools\recovery.img'
 winpath() { cygpath -w "$1"; }
+fb_retry() {  # fastboot command with up to 3 tries (Xiaomi fastboot drops the link now and then)
+	local i
+	for i in 1 2 3; do
+		"$FB" "$@" 2>&1 | tail -1 | tee /dev/stderr | grep -q -v -E 'FAILED|error' && return 0
+		sleep 5
+	done
+	return 1
+}
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 in_fastboot() { "$FB" devices 2>/dev/null | grep -q "$SERIAL"; }
 in_recovery() { "$ADB" devices 2>/dev/null | grep -q -E "$SERIAL\s+recovery"; }
@@ -24,7 +32,7 @@ wait_for() {  # cond seconds (wall clock)
 wait_for in_fastboot 180 || { log "phone not in fastboot"; exit 2; }
 if [ "$IMG" != - ]; then   # IMAGE "-": only pull the log of the last run
 log "booting $IMG"
-"$FB" boot "$(winpath "$IMG")" 2>&1 | tail -1
+fb_retry boot "$(winpath "$IMG")" || { log "fastboot cannot reach the phone (USB link)"; exit 5; }
 sleep 20   # leave fastboot before polling for its return
 log "waiting up to ${MAX}s for the automatic reset into fastboot"
 if ! wait_for in_fastboot "$MAX"; then
@@ -33,7 +41,7 @@ if ! wait_for in_fastboot "$MAX"; then
 fi
 fi
 log "back in fastboot; booting OrangeFox"
-"$FB" boot "$RECOVERY" 2>&1 | tail -1
+fb_retry boot "$RECOVERY" || { log "fastboot cannot reach the phone (USB link)"; exit 5; }
 wait_for in_recovery 120 || { log "OrangeFox did not show up on adb"; exit 4; }
 mkdir -p "$HACK/logs"
 dev=/dev/block/sda16   # userdata on spes (by-name link resolves here)
