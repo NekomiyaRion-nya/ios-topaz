@@ -22,6 +22,9 @@ build notouch "$COMMON $AUTO sweettouch=0 sweetsample=SpringBoard,lsd,backboardd
 build touchstep "$COMMON $AUTO ufslogsecs=1 sweettouchstep=1500 sweettouchdelay=20"
 build usb "$COMMON $AUTO sweettouch=0 sweetusb=2"
 build battery "$COMMON $AUTO sweettouch=0 sweetbattery=1"
+for t in 1 2 4 8 15; do   # touch probe-hang bisection (0152)
+	build tt$t "$COMMON $AUTO ufslogsecs=1 sweettouchstep=500 sweettouchdelay=20 sweettouchtest=$t"
+done
 # PROBE: extra boot-args for one investigation run (tools/spes-cycle.sh)
 build probe "$COMMON $AUTO sweettouch=0 ${PROBE:-}"
 build boot "$COMMON sweetfb_noconsole=1 sweettouch=0"
