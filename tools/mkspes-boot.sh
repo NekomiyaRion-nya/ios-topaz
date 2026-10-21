@@ -20,6 +20,8 @@ build() {  # name cmdline
 build debug "$COMMON $AUTO"
 build notouch "$COMMON $AUTO sweettouch=0 sweetsample=SpringBoard,lsd,backboardd"
 build touchstep "$COMMON $AUTO ufslogsecs=1 sweettouchstep=1500 sweettouchdelay=20"
+build usb "$COMMON $AUTO sweettouch=0 sweetusb=2"
+build battery "$COMMON $AUTO sweettouch=0 sweetbattery=1"
 # PROBE: extra boot-args for one investigation run (tools/spes-cycle.sh)
 build probe "$COMMON $AUTO sweettouch=0 ${PROBE:-}"
 build boot "$COMMON sweetfb_noconsole=1 sweettouch=0"
