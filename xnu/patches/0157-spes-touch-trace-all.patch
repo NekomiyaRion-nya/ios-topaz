@@ -1,0 +1,90 @@
+From 54c3281735f6c2d54887279a0c1c63715dfcd75e Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 08:24:48 +0900
+Subject: [PATCH] spes-0157: trace the first 8 touch transfers including the
+ NACK and abort paths
+
+---
+ bsd/dev/sweet_touch.c | 24 +++++++++++++++++++++---
+ 1 file changed, 21 insertions(+), 3 deletions(-)
+
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 3d104aa..ec568bc 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -141,6 +141,7 @@ static unsigned touch_step_ms;
+  * 4 leave AVDD (GPIO98) off, 8 leave reset alone.
+  */
+ static unsigned touch_test;
++static bool touch_tracing;     /* bit 16: the current transfer is traced */
+ 
+ static void
+ touch_stage(const char *name)
+@@ -253,6 +254,11 @@ touch_abort(void)
+ {
+ 	/* i2c-qcom-geni.c: M_GENI_CMD_CANCEL, then ABORT if cancel does not finish */
+ 	bool done = false;
++	if (touch_tracing) {
++		printf("SWEET TOUCH: xfer abort: CANCEL (irq=%#x status=%#x)\n",
++		    touch_rd(st.se, SE_IRQ), touch_rd(st.se, SE_STATUS));
++		touch_wait(150);
++	}
+ 	touch_wr(st.se, SE_CTRL, 4);
+ 	for (unsigned i = 0; i < 1000; ++i) {
+ 		if (touch_rd(st.se, SE_IRQ) & (1u << 4)) {
+@@ -261,6 +267,10 @@ touch_abort(void)
+ 		}
+ 		delay(1);
+ 	}
++	if (touch_tracing) {
++		printf("SWEET TOUCH: xfer abort: cancel done=%d\n", done);
++		touch_wait(150);
++	}
+ 	if (!done) {
+ 		touch_wr(st.se, SE_CTRL, 2); /* abort M command, release held bus */
+ 		for (unsigned i = 0; i < 1000; ++i) {
+@@ -303,13 +313,17 @@ touch_msg_run(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
+ {
+ 	/* spes: sweettouchtest bit 16 traces every register access of the first transfer */
+ 	static unsigned traced;
+-	bool trace = (touch_test & 16u) && traced++ == 0;
++	bool trace = (touch_test & 16u) && traced++ < 8;
++	touch_tracing = trace;
+ #define TOUCH_TRACE(what) do { \
+-		if (trace) { \
++		if (touch_tracing) { \
+ 			printf("SWEET TOUCH: xfer %s\n", what); \
+-			touch_wait(300); \
++			touch_wait(150); \
+ 		} \
+ 	} while (0)
++	if (trace) {
++		printf("SWEET TOUCH: xfer #%u addr=%#x %s\n", traced, addr, nr ? "read" : "write");
++	}
+ 	if (st.dead || nt > 3 || nr > 90 || (nt && nr) || (!nt && !nr)) {
+ 		return EIO;
+ 	}
+@@ -411,6 +425,7 @@ touch_msg_run(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
+ 		}
+ 		if (irq & SE_ERRORS) {
+ 			err = (irq & SE_NACK) ? ENXIO : EIO;
++			TOUCH_TRACE("error path (NACK or failure)");
+ 			/* A completed NACK is normal during address probing. Aborting an
+ 			 * idle sequencer may never produce ABORT_DONE. Wait for completion
+ 			 * and leave a clean idle engine available for the other IC. */
+@@ -421,9 +436,12 @@ touch_msg_run(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
+ 			if ((irq & SE_DONE) && !(touch_rd(st.se, SE_STATUS) & 1u) &&
+ 			    !(touch_rd(st.se, SE_TX_COUNT) & 0xfffffffu) &&
+ 			    !(touch_rd(st.se, SE_RX_COUNT) & 0x1ffffffu)) {
++				TOUCH_TRACE("clean NACK: clearing IRQ status");
+ 				touch_wr(st.se, SE_IRQ_CLR, irq);
++				TOUCH_TRACE("IRQ status cleared, returning");
+ 				return err;
+ 			}
++			TOUCH_TRACE("not clean: aborting");
+ 			break;
+ 		}
+ 		if (nt && !st.sent && (irq & SE_TX_WM_IRQ)) {
+-- 
+2.52.0.windows.1
+
