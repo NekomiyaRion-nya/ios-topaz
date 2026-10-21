@@ -7,7 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 K=xnu/out/kernel.development.sweet
-COMMON='debug=0xc serial=3 cpus=4 keepsyms=1 -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_hz=30 sweetbattery=0 sweettouchdiag=1'
+COMMON='debug=0xc serial=3 cpus=4 keepsyms=1 -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_hz=30 sweetbattery=0 sweettouchdiag=1 sweetusb=2'
 # test images reset into fastboot after AUTOREBOOT s (tools/spes-cycle.sh pulls the log)
 AUTO="sweetautoreboot=${AUTOREBOOT:-360} sweethwwdt=${HWWDT:-20}"
 mkdir -p shim/out

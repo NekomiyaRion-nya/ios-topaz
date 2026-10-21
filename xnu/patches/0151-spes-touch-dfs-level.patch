@@ -1,0 +1,80 @@
+From 277f93a8623907c63f3478639cc812d10f252f8b Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 07:09:42 +0900
+Subject: [PATCH] spes-0151: touch picks a 19.2 MHz DFS level for SE2 (dumps
+ the DFS table, never probes on an unclocked level)
+
+---
+ bsd/dev/sweet_touch.c | 42 ++++++++++++++++++++++++++++++++++++------
+ 1 file changed, 36 insertions(+), 6 deletions(-)
+
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 7751c33..8d6b401 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -96,6 +96,7 @@ static struct {
+ 	uint32_t d_vote, d_cfg, d_cbcr, d_fw, d_status, d_hwtx, d_hwrx;
+ 	int d_fe1, d_fe2, d_ge;
+ 	uint8_t d_fid1, d_fid2;
++	unsigned clk_level;     /* spes: SE_GENI_CLK_SEL (DFS performance level) */
+ 	/* sweettouchdiag=2: polling statistics */
+ 	unsigned s_frames, s_errs, s_down, s_up, s_maxn;
+ 	int s_lasterr, s_lastx, s_lasty;
+@@ -196,11 +197,40 @@ touch_clocks(void)
+ 	    touch_rd(st.gcc, TOUCH_RCG + 4u), touch_rd(st.gcc, TOUCH_RCG - 4u));
+ 	st.d_vote = touch_rd(st.gcc, TOUCH_GCC_VOTE);
+ 	touch_stage("clocks: rcg");
+-	touch_wr(st.gcc, TOUCH_RCG + 4u, 1u);
+-	touch_wr(st.gcc, TOUCH_RCG, touch_rd(st.gcc, TOUCH_RCG) | 1u);
+-	if (!touch_wait_clear(st.gcc, TOUCH_RCG, 1u)) {
+-		printf("SWEET TOUCH: RCG update timeout\n");
+-		return false;
++	/*
++	 * spes: the QUP S2 RCG runs in DFS mode (gcc-sm6115.c DEFINE_RCG_DFS):
++	 * the serial engine picks a performance level with SE_GENI_CLK_SEL and
++	 * the CFG/CMD write below is ignored. Level 0 is not guaranteed to be
++	 * 19.2 MHz; starting a transfer on an unclocked level stalls the bus and
++	 * freezes the SoC. Find a level sourced from XO with divider 1
++	 * (clk-rcg2.c: DFSR at +0x14 bit 0, PERF_DFSR(l) at +0x1c + 4 l with the
++	 * CFG layout) and refuse to probe when there is none.
++	 */
++	uint32_t dfsr = touch_rd(st.gcc, TOUCH_RCG + 0x14u);
++	st.clk_level = 0;
++	if (dfsr & 1u) {
++		int found = -1;
++		for (unsigned l = 0; l < 8; ++l) {
++			uint32_t perf = touch_rd(st.gcc, TOUCH_RCG + 0x1cu + 4u * l);
++			printf("SWEET TOUCH: dfs level %u perf=%#x (src %u div %u)\n",
++			    l, perf, (perf >> 8) & 7u, perf & 0x1fu);
++			if (found < 0 && perf != 0 && ((perf >> 8) & 7u) == 0 && (perf & 0x1fu) <= 1u) {
++				found = (int)l;
++			}
++		}
++		if (found < 0) {
++			printf("SWEET TOUCH: no 19.2 MHz DFS level for SE2; probes skipped\n");
++			return false;
++		}
++		st.clk_level = (unsigned)found;
++		printf("SWEET TOUCH: DFS on, using level %u (19.2 MHz XO)\n", st.clk_level);
++	} else {
++		touch_wr(st.gcc, TOUCH_RCG + 4u, 1u);
++		touch_wr(st.gcc, TOUCH_RCG, touch_rd(st.gcc, TOUCH_RCG) | 1u);
++		if (!touch_wait_clear(st.gcc, TOUCH_RCG, 1u)) {
++			printf("SWEET TOUCH: RCG update timeout\n");
++			return false;
++		}
+ 	}
+ 	st.d_cfg = touch_rd(st.gcc, TOUCH_RCG + 4u);
+ 	st.d_cbcr = touch_rd(st.gcc, TOUCH_RCG - 4u);
+@@ -613,7 +643,7 @@ touch_se_init(void)
+ 	touch_wr(st.se, 0xe30, touch_rd(st.se, 0xe30) | 0x0fu);
+ 	touch_wr(st.se, 0x24, 0x7f);
+ 	touch_wr(st.se, 0x20, 1);
+-	touch_wr(st.se, SE_CLK_SEL, 0);
++	touch_wr(st.se, SE_CLK_SEL, st.clk_level);     /* spes: DFS level found in touch_clocks */
+ 	touch_wr(st.se, SE_MCLK, (2u << 4) | 1u);
+ 	touch_wr(st.se, SE_SCL, (5u << 20) | (11u << 10) | 22u); /* 400 kHz */
+ 	/* Linux 8-bit I2C packing: MSB on the wire, LSB byte first in FIFO. */
+-- 
+2.52.0.windows.1
+
