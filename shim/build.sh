@@ -1,7 +1,8 @@
 #!/bin/bash
-# Build the shim and wrap it in a boot.img v4: the topaz (Xiaomi) ABL ignores
-# v1/v2 images. The DTB and the vendor ramdisk come from vendor_boot of the
-# active slot; loader.c finds our payload behind the vendor ramdisk.
+# Build the shim and wrap it in a boot.img. spes (Redmi Note 11) ships boot
+# header v3 + vendor_boot v3, so that is the default; topaz used v4
+# (BOOT_HEADER_VERSION=4). Either way the DTB and the vendor ramdisk come from
+# vendor_boot and the payload rides behind the shim in the kernel Image.
 set -euo pipefail
 cd "$(dirname "$0")"
 CC=aarch64-linux-gnu-gcc
@@ -24,7 +25,7 @@ truncate -s "$size" out/Image
 # Ramdisk: an xnu payload (tools/mkpayload.py) if given as $1, else an empty
 # newc cpio (ABL dislikes a zero-size ramdisk on some builds) -> diagnostics.
 if [ -n "${1:-}" ]; then
-	# topaz ABL drops the v4 boot ramdisk: append the payload to the Image at
+	# topaz ABL drops the v4 boot ramdisk (spes: keep one path): append the payload to the Image at
 	# the first 4K boundary after _end (loader.c) and grow image_size.
 	truncate -s $(( (size + 0xfff) & ~0xfff )) out/Image
 	cat "$1" >> out/Image
@@ -33,7 +34,7 @@ if [ -n "${1:-}" ]; then
 else
 	(cd out && rm -rf rd && mkdir rd && cd rd && find . | cpio -o -H newc --quiet | gzip -9 > ../ramdisk.bin)
 fi
-${MKBOOTIMG:-python3 /home/makr/work/topaz/mkbootimg_src/mkbootimg.py} --header_version 4 --kernel out/Image --ramdisk out/ramdisk.bin \
+${MKBOOTIMG:-python3 ../tools/mkbootimg.py} --header_version "${BOOT_HEADER_VERSION:-3}" --kernel out/Image --ramdisk out/ramdisk.bin \
 	--os_version 13.0.0 --os_patch_level 2025-01 \
 	--cmdline "console=null" -o out/shim-boot.img
 # Host render of the console layout.

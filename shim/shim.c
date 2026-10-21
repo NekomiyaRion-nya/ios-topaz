@@ -8,6 +8,7 @@
  */
 #include <stdint.h>
 #include "console.h"
+#include "fdt.h"
 #include "mmu.h"
 #include "loader.h"
 #include "ufs.h"
@@ -513,6 +514,16 @@ void shim_main(uint64_t dtb)
 	uint64_t mmfr0 = rsr("id_aa64mmfr0_el1");
 	con_hex2("MMFR0", "lo=", (uint32_t)mmfr0, "tg16=", (mmfr0 >> 20) & 0xf);
 	con_hex2("MIDR", "el1=", (uint32_t)rsr("midr_el1"), "mpidr=", (uint32_t)rsr("mpidr_el1"));
+	{
+		/* spes: show the DDR ranges ABL reports (mkadt.py --mem picks from these) */
+		uint64_t mb[8], ms[8];
+		int nm = fdt_memory(dtb, mb, ms, 8);
+		con_hex("MEMNODES", nm);
+		for (int i = 0; i < nm; i++) {
+			con_hex("DDR base", mb[i]);
+			con_hex("DDR size", ms[i]);
+		}
+	}
 	if (((mmfr0 >> 20) & 0xf) == 0) {
 		con_str("SILVER", "no 16K granule: handing off to gold CPU 0x100");
 		con_skip();
