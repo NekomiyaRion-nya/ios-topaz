@@ -1,0 +1,33 @@
+From 01c27c6e50fe2096b7f063853080a5f07f097f50 Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 08:57:19 +0900
+Subject: [PATCH] spes-0161: start the GPU test (sweetgpu=1) after the input
+ drivers
+
+---
+ bsd/dev/sweet_ufs.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 37eb452..8735b1f 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -52,6 +52,7 @@ static void sweet_log_start(void);
+ extern void sweet_sample_start(void);
+ extern void sweet_keys_init(void);
+ extern void sweet_touch_init(void);
++extern void sweet_gpu_init(void);
+ extern void sweet_usb_probe(void);
+ 
+ #define REG_CAP         0x00
+@@ -823,6 +824,7 @@ sweet_ufs_init(void)
+ 	(void)PE_parse_boot_argn("sweethw", &hw, sizeof(hw));
+ 	sweet_touch_init();
+ 	sweet_keys_init();
++	sweet_gpu_init();        /* spes: Adreno 610 G1 test, boot-arg sweetgpu=1 (SweetGPU.cpp) */
+ 	/*
+ 	 * spes: sweet_usb.c is ported to khaje (0148). Its default (sweetusb=1)
+ 	 * only reads GCC status and, when powered, DWC3; sweetusb=2 starts the
+-- 
+2.52.0.windows.1
+

@@ -13,6 +13,13 @@ until "$PT/fastboot.exe" devices 2>/dev/null | grep -q 14e0ddb2; do
 	sleep 10
 	[ $SECONDS -ge $end ] && { log "gave up waiting"; exit 2; }
 done
+# FLASHBOOT=1: first put the current spes-boot.img (normal iOS, USB Ethernet, fastboot on request)
+# into boot_a/boot_b, so parking between cycles boots a reachable iOS.
+if [ "${FLASHBOOT:-0}" = 1 ]; then
+	for slot in a b; do
+		"$PT/fastboot.exe" flash boot_$slot "$(cygpath -w "$HACK/ios-spes/shim/out/spes-boot.img")" 2>&1 | tail -1
+	done
+fi
 for job in "$@"; do
 	name=${job%%:*} img=${job#*:}
 	log "=== $name ($img)"

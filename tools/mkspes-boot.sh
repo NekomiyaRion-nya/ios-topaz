@@ -25,6 +25,7 @@ build battery "$COMMON $AUTO sweettouch=0 sweetbattery=1"
 for t in 1 2 4 8 15 17 29 49 51 81 209; do   # touch probe-hang bisection (0152)
 	build tt$t "$COMMON $AUTO ufslogsecs=1 sweettouchstep=500 sweettouchdelay=20 sweettouchtest=$t"
 done
+build gpu "$COMMON $AUTO sweettouch=0 sweetgpu=1 sweetgpudelay=40"   # Adreno 610 G1 test (0160)
 # PROBE: extra boot-args for one investigation run (tools/spes-cycle.sh)
 build probe "$COMMON $AUTO sweettouch=0 ${PROBE:-}"
 build boot "$COMMON sweetfb_noconsole=1 sweettouch=0"

@@ -78,6 +78,22 @@ def node(name, props=(), children=()):
     return n
 
 
+# spes: Adreno 610 firmware for the kernel's G1 test (iokit/Kernel/arm/SweetGPU.cpp,
+# boot-arg sweetgpu=1): the vendor zap shader (.mdt metadata + the .b02 load
+# segment) and SQE microcode from the spes ROM's vendor partition, kept out of
+# git like the other vendor/Apple blobs.
+GPU_FW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../research/gpu-fw')
+
+
+def gpu_fw_node(ph):
+    files = {'zap-mdt': 'a610_zap.mdt', 'zap-b02': 'a610_zap.b02', 'sqe': 'a630_sqe.fw'}
+    paths = {k: os.path.join(GPU_FW_DIR, v) for k, v in files.items()}
+    if not all(os.path.exists(p) for p in paths.values()):
+        print(f'warning: {GPU_FW_DIR} incomplete, no /arm-io/sweet-gpu node', file=sys.stderr)
+        return []
+    return [node('sweet-gpu', [ph()] + [(k, open(p, 'rb').read()) for k, p in paths.items()])]
+
+
 def build(seed=None, qemu=False, highmem=False, native=False, midmem=False, mem=None):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
     phys_base, mem_size = ((MID_PHYS_BASE, MID_MEM_SIZE) if midmem else
@@ -188,6 +204,7 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False, mem=
         # otherwise crashes trying to set the PMU boot stage (customer builds
         # ignore the -wdt_no_pmu boot-arg).
         node('wdt', [ph(), ('no-pmu', u32(1))]),
+    ] + gpu_fw_node(ph) + [
         # Main display: IOMobileFramebuffer.framework counts /arm-io children
         # with this device_type and reads the canvas size from the node
         # (the presented iPhone X size, see SweetFramebuffer.cpp);
