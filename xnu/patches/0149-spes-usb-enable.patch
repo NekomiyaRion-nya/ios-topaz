@@ -1,0 +1,35 @@
+From 977760140d5a25c19cc24661f34aa05bca4def25 Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 02:08:02 +0900
+Subject: [PATCH] spes-0149: run the USB probe on spes (sweetusb=0 skips it)
+
+---
+ bsd/dev/sweet_ufs.c | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 5012049..8632088 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -823,11 +823,13 @@ sweet_ufs_init(void)
+ 	(void)PE_parse_boot_argn("sweethw", &hw, sizeof(hw));
+ 	sweet_touch_init();
+ 	sweet_keys_init();
+-	if (hw == 1) {
+-		sweet_usb_probe();
+-	} else {
+-		printf("SWEET UFS: USB skipped (topaz, sweethw=0)\n");
+-	}
++	/*
++	 * spes: sweet_usb.c is ported to khaje (0148). Its default (sweetusb=1)
++	 * only reads GCC status and, when powered, DWC3; sweetusb=2 starts the
++	 * CDC-ECM gadget and the live log, sweetusb=0 skips it.
++	 */
++	(void)hw;
++	sweet_usb_probe();
+ 	return 0;
+ }
+ 
+-- 
+2.52.0.windows.1
+
