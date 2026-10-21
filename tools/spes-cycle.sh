@@ -20,7 +20,7 @@ wait_for() {  # cond seconds
 	until $1; do sleep 3; t=$((t + 3)); [ $t -ge "$2" ] && return 1; done
 }
 
-wait_for in_fastboot 60 || { log "phone not in fastboot"; exit 2; }
+wait_for in_fastboot 180 || { log "phone not in fastboot"; exit 2; }
 log "booting $IMG"
 "$FB" boot "$(winpath "$IMG")" 2>&1 | tail -1
 sleep 20   # leave fastboot before polling for its return

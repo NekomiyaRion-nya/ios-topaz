@@ -1,0 +1,84 @@
+From d6f5295d5fe530455c1511de4754e97a7f8e3209 Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 01:40:03 +0900
+Subject: [PATCH] spes-0143: PMIC write over SPMI; reboot reason BOOTLOADER in
+ PON SOFT_RB_SPARE + warm PS_HOLD reset
+
+---
+ bsd/dev/sweet_keys.c | 60 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 60 insertions(+)
+
+diff --git a/bsd/dev/sweet_keys.c b/bsd/dev/sweet_keys.c
+index 65970f9..887a6df 100644
+--- a/bsd/dev/sweet_keys.c
++++ b/bsd/dev/sweet_keys.c
+@@ -82,6 +82,66 @@ keys_read(uint16_t apid, uint16_t addr, uint8_t *out)
+ 	return false;
+ }
+ 
++/*
++ * spes: PMIC writes for the reboot path. v5 arbiter RW channels sit in the
++ * "chnls" region, 0x10000 per APID (spmi-pmic-arb.c pmic_arb_offset_v5):
++ * WDATA0 at +0x10, then the EXT_WRITEL command (opcode 0) at +0, STATUS +8.
++ */
++#define KEYS_CHNLS_PA        0x01e00000u
++#define PON_PS_HOLD_RST_CTL  0x085au
++#define PON_PS_HOLD_RST_CTL2 0x085bu
++#define PON_SOFT_RB_SPARE    0x088fu
++
++static bool
++keys_write(uint16_t apid, uint16_t addr, uint8_t val)
++{
++	if (apid == KEYS_NO_APID) {
++		return false;
++	}
++	vm_offset_t ch = ml_io_map(KEYS_CHNLS_PA + 0x10000u * apid, 0x1000);
++	if (!ch) {
++		return false;
++	}
++	*(volatile uint32_t *)(ch + 0x10u) = val;
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)ch = (uint32_t)(addr & 0xffu) << 4; /* EXT_WRITEL, one byte */
++	__asm__ volatile("dsb osh" ::: "memory");
++	for (unsigned i = 0; i < 1000; ++i) {
++		uint32_t status = keys_rd(ch, 0x08u);
++		if (status & 1u) {
++			keys_last_status = status;
++			return !(status & 0x0eu);
++		}
++		delay(1);
++	}
++	return false;
++}
++
++/*
++ * Make the next PS_HOLD drop land in fastboot, as Linux's msm-poweroff does
++ * for "reboot bootloader": PON restart reason BOOTLOADER (2) in SOFT_RB_SPARE
++ * bits 7:1 (qpnp-power-on, gen2 PON) and a warm PS_HOLD reset, which keeps
++ * the IMEM restart reason as well. Called by sweet_ufs.c before resetting.
++ */
++bool sweet_pmic_reboot_bootloader(void);
++bool
++sweet_pmic_reboot_bootloader(void)
++{
++	uint8_t spare = 0;
++	bool rok = keys_read(keys_pon_apid, PON_SOFT_RB_SPARE, &spare);
++	bool sok = rok && keys_write(keys_pon_apid, PON_SOFT_RB_SPARE, (uint8_t)((spare & 1u) | (2u << 1)));
++	bool wok = keys_write(keys_pon_apid, PON_PS_HOLD_RST_CTL2, 0);
++	delay(500);
++	wok = wok && keys_write(keys_pon_apid, PON_PS_HOLD_RST_CTL, 0x01); /* WARM_RESET */
++	delay(500);
++	wok = wok && keys_write(keys_pon_apid, PON_PS_HOLD_RST_CTL2, 0x80);
++	uint8_t check = 0;
++	(void)keys_read(keys_pon_apid, PON_SOFT_RB_SPARE, &check);
++	printf("SWEET REBOOT: pon-apid=%u spare %#x->%#x (read %d write %d) warm-reset %d status %#x\n",
++	    keys_pon_apid, spare, check, rok, sok, wok, keys_last_status);
++	return sok;
++}
++
+ static void
+ keys_wait(void)
+ {
+-- 
+2.52.0.windows.1
+
