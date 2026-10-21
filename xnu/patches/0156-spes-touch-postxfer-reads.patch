@@ -1,0 +1,42 @@
+From 4a031ff2fd91307905aa4cfe349f2fcf12640bb9 Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 08:14:15 +0900
+Subject: [PATCH] spes-0156: sweettouchtest bit 128 reads GCC then SE2
+ registers one by one after the transfer
+
+---
+ bsd/dev/sweet_touch.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 973be3b..3d104aa 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -378,6 +378,24 @@ touch_msg_run(uint8_t addr, const uint8_t *tx, unsigned nt, uint8_t *rx,
+ 			touch_wait(200);
+ 			printf("SWEET TOUCH: xfer alive %u ms after the command\n", k * 200u);
+ 		}
++		/* bit 128: which read stalls - GCC (outside QUP) first, then SE2 registers */
++		if (touch_test & 128u) {
++			printf("SWEET TOUCH: xfer gcc vote=%#x s2 cbcr=%#x rcg cmd=%#x cfg=%#x\n",
++			    touch_rd(st.gcc, TOUCH_GCC_VOTE), touch_rd(st.gcc, TOUCH_RCG - 4u),
++			    touch_rd(st.gcc, TOUCH_RCG), touch_rd(st.gcc, TOUCH_RCG + 4u));
++			touch_wait(300);
++			static const struct { uint32_t off; const char *name; } regs[] = {
++				{ 0x068u, "FW_REVISION" }, { 0x020u, "GENI_CLK_CTRL" }, { 0x028u, "CGC_CTRL" },
++				{ 0x040u, "STATUS" }, { 0x048u, "M_CLK_CFG" }, { 0x800u, "TX_FIFO_STATUS" },
++				{ 0x610u, "M_IRQ_STATUS" },
++			};
++			for (unsigned r = 0; r < sizeof(regs) / sizeof(regs[0]); ++r) {
++				printf("SWEET TOUCH: xfer about to read %s (%#x)\n", regs[r].name, regs[r].off);
++				touch_wait(300);
++				printf("SWEET TOUCH: xfer %s = %#x\n", regs[r].name, touch_rd(st.se, regs[r].off));
++				touch_wait(300);
++			}
++		}
+ 		printf("SWEET TOUCH: xfer reading SE2 again\n");
+ 		touch_wait(300);
+ 	}
+-- 
+2.52.0.windows.1
+
