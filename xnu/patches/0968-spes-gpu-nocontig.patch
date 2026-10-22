@@ -1,0 +1,39 @@
+From 5f43d7f26e8a94b6c267469c74bc20676c549da2 Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Fri, 23 Oct 2026 07:23:44 +0900
+Subject: [PATCH] spes-0968: boot-arg gpu_contig=0: no physically contiguous
+ kernel-RAM attempt for screen-sized surfaces (on spes the search held the VM
+ locks until the hardware watchdog bit)
+
+---
+ iokit/Kernel/arm/SweetSurface.cpp | 14 +++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
+index 8e7965c..652c1fc 100644
+--- a/iokit/Kernel/arm/SweetSurface.cpp
++++ b/iokit/Kernel/arm/SweetSurface.cpp
+@@ -989,7 +989,19 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
+ 			 * pages came next. (The descriptor keeps them: RedwoodGPU gives them to the GPU.)
+ 			 */
+ 			uint64_t take = gpu_low ? sweet_round_upage(s->allocSize + 64ull * s->bytesPerRow) : s->allocSize;
+-			if (gpu_low && take <= (16u << 20)) {
++			/*
++			 * spes: gpu_contig=0 skips the contiguous attempt. Kernel RAM below 4 GiB is all there is
++			 * and soon fragmented; vm_page_find_contiguous then scans and steals pages under the VM
++			 * locks for so long that the hardware watchdog bites (backboardd's second screen-sized
++			 * surface, a minute after boot). Ordinary pages: eagl copies them into a texture instead.
++			 */
++			static int gpu_contig = -1;
++			if (gpu_contig < 0) {
++				uint32_t on = 1;
++				(void)PE_parse_boot_argn("gpu_contig", &on, sizeof(on));
++				gpu_contig = on != 0;
++			}
++			if (gpu_low && gpu_contig && take <= (16u << 20)) {
+ 				mem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
+ 				    kIODirectionInOut | kIOMemoryKernelUserShared | kIOMemoryPhysicallyContiguous, take,
+ 				    0x0000000FFFFFC000ull);
+-- 
+2.52.0.windows.1
+
