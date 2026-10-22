@@ -15,7 +15,7 @@ winpath() { cygpath -w "$1"; }
 fb_retry() {  # fastboot command with up to 3 tries (Xiaomi fastboot drops the link now and then)
 	local i
 	for i in 1 2 3; do
-		"$FB" "$@" 2>&1 | tail -1 | tee /dev/stderr | grep -q -v -E 'FAILED|error' && return 0
+		"$FB" "$@" 2>&1 | tail -1 | tee /dev/stderr | grep -q -v -E "FAILED|error" && return 0
 		sleep 5
 	done
 	return 1
@@ -38,6 +38,7 @@ if ! wait_for in_fastboot 15; then
 	wait_for in_fastboot 180 || { log "phone not in fastboot"; exit 2; }
 fi
 if [ "$IMG" != - ]; then   # IMAGE "-": only pull the log of the last run
+L0=$(wc -l < "$HACK/logs/live.txt")
 log "booting $IMG"
 fb_retry boot "$(winpath "$IMG")" || { log "fastboot cannot reach the phone (USB link)"; exit 5; }
 sleep 20   # leave fastboot before polling for its return
@@ -46,6 +47,16 @@ if ! wait_for in_fastboot "$MAX"; then
 	log "no reset within ${MAX}s: hung? hold Power + Vol-down, then rerun with the pull step"
 	exit 3
 fi
+fi
+# PULL=auto (default): the USB live log already holds the run when it grew by more than 50 lines; then
+# skip OrangeFox (a minute) and keep that part as logs/NAME.live.txt. PULL=1 always pulls the UFS log.
+if [ "${PULL:-auto}" != 1 ] && [ -n "${L0:-}" ] && [ $(( $(wc -l < "$HACK/logs/live.txt") - L0 )) -gt 50 ]; then
+	tail -n +"$L0" "$HACK/logs/live.txt" > "$HACK/logs/$NAME.live.txt"
+	log "log: logs/$NAME.live.txt ($(wc -l < "$HACK/logs/$NAME.live.txt") lines, USB live log; OrangeFox skipped)"
+	if [ "${PARK:-1}" = 1 ]; then
+		fb_retry reboot >/dev/null && log "parked in iOS (boot partition)"
+	fi
+	exit 0
 fi
 log "back in fastboot; booting OrangeFox"
 fb_retry boot "$RECOVERY" || { log "fastboot cannot reach the phone (USB link)"; exit 5; }

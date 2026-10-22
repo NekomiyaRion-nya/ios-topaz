@@ -1,0 +1,82 @@
+From 7fc50b571c9216ab6f054f4982a58c2cfe25b4a3 Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Fri, 23 Oct 2026 06:36:39 +0900
+Subject: [PATCH] spes-0967: GPU pool in free first-bank DDR (0x64000000 + 192
+ MB) when topaz' 0x90000000 is kernel RAM: screen-sized surfaces no longer
+ need 12 MB contiguous kernel RAM below 4 GiB (vm_page_find_contiguous failed
+ in backboardd); gpu_pool= / gpu_pool_size= override
+
+---
+ iokit/Kernel/arm/TopazAdreno.cpp | 45 ++++++++++++++++++++++----------
+ 1 file changed, 31 insertions(+), 14 deletions(-)
+
+diff --git a/iokit/Kernel/arm/TopazAdreno.cpp b/iokit/Kernel/arm/TopazAdreno.cpp
+index 4586772..185a05e 100644
+--- a/iokit/Kernel/arm/TopazAdreno.cpp
++++ b/iokit/Kernel/arm/TopazAdreno.cpp
+@@ -163,12 +163,22 @@ kbuf_pa(struct kbuf *b, uint64_t off)
+  * reserved regions in the stock DT, not given to the kernel): a pool of it is
+  * the GPU's, mapped write-combined (Normal non-cacheable: no cache upkeep).
+  */
+-#define GPU_POOL_BASE       0x90000000ull
+-#define GPU_POOL_SIZE       0x40000000ull       /* 1 GB */
++/*
++ * spes: where the pool is, decided once (gpu_pool_place): topaz' 1 GB at 0x90000000 unless that is
++ * kernel RAM (spes: RAM from 0x80000000), then 192 MB of the first DDR bank that nothing uses:
++ * 0x64000000-0x70000000, above every fixed carve-out (they end at 0x63900000) and below the
++ * modem pool (0x70000000). Below 4 GiB, contiguous and never fragmented by the kernel, unlike
++ * kernel RAM, where a 12 MB screen surface could not be found any more (vm_page_find_contiguous).
++ * Boot-args gpu_pool=BASE gpu_pool_size=SIZE override.
++ */
++static uint64_t gpu_pool_base = 0x90000000ull, gpu_pool_size = 0x40000000ull;
++#define GPU_POOL_BASE       gpu_pool_base
++#define GPU_POOL_SIZE       gpu_pool_size
+ #define GPU_POOL_UNIT       0x10000ull          /* 64 KB */
+ #define GPU_POOL_CHUNK      0x4000000ull        /* 64 MB: mapped on first use (1 GB at once is more IO space than there is) */
+ #define GPU_POOL_CHUNKS     (GPU_POOL_SIZE / GPU_POOL_CHUNK)
+-static uint8_t *gpu_chunk_va[GPU_POOL_CHUNKS];
++#define GPU_POOL_CHUNKS_MAX 16u                 /* 1 GB */
++static uint8_t *gpu_chunk_va[GPU_POOL_CHUNKS_MAX];
+ static bool gpu_pool_ready;
+ static struct { uint64_t start, size; } pool_free[2048];
+ static unsigned pool_free_count;
+@@ -253,18 +263,25 @@ topaz_gpu_pool_alloc(uint64_t size, void **va)
+ 	if (size > GPU_POOL_CHUNK - GPU_POOL_UNIT) {
+ 		return 0;
+ 	}
+-	/*
+-	 * spes: the kernel's RAM starts at 0x80000000 (mkadt --mem), so topaz's pool in the
+-	 * "unused" middle bank is the kernel's own memory there: never hand it out.
+-	 */
+-	if (GPU_POOL_BASE + GPU_POOL_SIZE > gPhysBase && GPU_POOL_BASE < gPhysBase + gPhysSize) {
+-		static bool said;
+-		if (!said) {
+-			said = true;
+-			IOLog("TopazGPU: pool %#llx+%#llx overlaps kernel RAM %#lx+%#lx: not used (boot with gpu_midmem=1 gpu_fbpool=0)\n",
+-			    GPU_POOL_BASE, GPU_POOL_SIZE, gPhysBase, gPhysSize);
++	if (!gpu_pool_ready) {
++		uint64_t b = 0, z = 0;
++		bool forced = PE_parse_boot_argn("gpu_pool", &b, sizeof(b));
++		(void)PE_parse_boot_argn("gpu_pool_size", &z, sizeof(z));
++		if (forced) {
++			gpu_pool_base = b;
++			gpu_pool_size = z ? z : gpu_pool_size;
++		} else if (gpu_pool_base + gpu_pool_size > gPhysBase && gpu_pool_base < gPhysBase + gPhysSize) {
++			gpu_pool_base = 0x64000000ull;
++			gpu_pool_size = 0x0c000000ull;
+ 		}
+-		return 0;
++		gpu_pool_size &= ~(GPU_POOL_CHUNK - 1);
++		if (gpu_pool_size > (uint64_t)GPU_POOL_CHUNKS_MAX * GPU_POOL_CHUNK) {
++			gpu_pool_size = (uint64_t)GPU_POOL_CHUNKS_MAX * GPU_POOL_CHUNK;
++		}
++		IOLog("TopazGPU: pool %#llx + %#llx (%llu chunks)\n", gpu_pool_base, gpu_pool_size, GPU_POOL_CHUNKS);
++	}
++	if (gpu_pool_base + gpu_pool_size > gPhysBase && gpu_pool_base < gPhysBase + gPhysSize) {
++		return 0;       /* never kernel RAM */
+ 	}
+ 	if (!gpu_pool_ready) {
+ 		/* one range per chunk, a unit short so that neighbours never merge: no buffer crosses a chunk */
+-- 
+2.52.0.windows.1
+

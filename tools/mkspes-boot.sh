@@ -37,7 +37,7 @@ build battery "$COMMON $AUTO sweettouch=0 sweetbattery=1"
 build touch "$COMMON $AUTO ufslogsecs=1 sweettouchdelay=20 sweettouchmode=1"
 build touchnol9a "$COMMON $AUTO ufslogsecs=1 sweettouchstep=300 sweettouchdelay=20 sweettouchl9a=0"
 # GPU: Adreno 610 via TopazAdreno/RedwoodGPU (kernel) + Mesa freedreno behind EAGL in backboardd (GPUFILES)
-GPUARGS="gpu=1 gpu_midmem=1 gpu_fbpool=0 topaz_inject=/topaz/lib/libtopaz-inject.dylib,backboardd"
+GPUARGS="gpu=1 gpu_midmem=1 topaz_inject=/topaz/lib/libtopaz-inject.dylib,backboardd"
 [ -n "$GPUFILES" ] && build gpu "$COMMON $AUTO sweettouchmode=1 $GPUARGS"
 # Wi-Fi: TopazModem boots the modem from modem_a through TrustZone (spes tables, 0966), wifid through Apple80211 glue
 build wifi "$COMMON $AUTO sweettouchmode=1 modem=1 wifi=1"
