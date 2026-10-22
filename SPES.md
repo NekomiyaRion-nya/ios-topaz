@@ -78,3 +78,9 @@ boot_a/boot_b hold `spes-boot.img` (the iOS shim) since 2026-10-22, so a normal 
   `CP_MEM_WRITE` came back as `0xC0FFEE00`: the Adreno 610 executes our command stream. No SMMU fault
   (CB0 FSR 0x400 is only FORMAT=AArch64), iOS kept running until `sweetautoreboot`. (The earlier `gpu2` log
   was the parked boot image, not the GPU image.)
+- 2026-10-22 touch, paused: across tt17/17c/29/49/51/81/209 the log always stops right before a read of SE2
+  `M_IRQ_STATUS` (0x610), after 0-6 good transfers; other SE2 reads (0x68/0x20/0x28/0x40/0x48/0x800) are fine.
+  `sweethwwdt` bites ~20 s later (back in fastboot ~100 s after boot), so EL3 is alive and the APSS is stuck.
+  Possible: a synchronous/SError abort -> XNU panic whose text is never flushed (no panic hook writes the
+  UFS log). Next: a panic hook that flushes the log (or sends it over the USB live log) before hanging.
+  Upstream topaz touch (same SoC, same driver, FT5452) works; no touch changes upstream since the fork.
