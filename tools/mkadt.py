@@ -94,7 +94,7 @@ def gpu_fw_node(ph):
     return [node('sweet-gpu', [ph()] + [(k, open(p, 'rb').read()) for k, p in paths.items()])]
 
 
-def build(seed=None, qemu=False, highmem=False, native=False, midmem=False, mem=None):
+def build(seed=None, qemu=False, highmem=False, native=False, midmem=False, mem=None, amp=False):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
     phys_base, mem_size = ((MID_PHYS_BASE, MID_MEM_SIZE) if midmem else
                            (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE))
@@ -160,23 +160,29 @@ def build(seed=None, qemu=False, highmem=False, native=False, midmem=False, mem=
     # on gold CPU 0x100 and parks the silver cluster. One cluster. The kernel defaults to one
     # and uses cpus=N to select an initial prefix (N <= 8).
     # QEMU retains its original single-CPU tree: its MPIDRs differ from sweet.
+    # --amp (spes, a TOPAZ_4K=1 kernel with 4 KiB pages): all eight cores, gold 0x100-0x103 as the
+    # P cluster (listed first: the boot CPU) and silver 0x0-0x3 as the E cluster; ml_parse_cpu_topology
+    # reads cluster-type 'P'/'E' (topaz-0141 __ARM_AMP__). The shim turns the silver boot CPU off.
     cpu_nodes = []
-    for core in range(1 if qemu else 4):
+    cores = [(c, 0x100 | c, ord('P') if amp else 0, 0) for c in range(1 if qemu else 4)]
+    if amp and not qemu:
+        cores += [(4 + c, c, ord('E'), 1) for c in range(4)]
+    for core, mpidr, ctype, cluster in cores:
         cpu_nodes.append(node(f'cpu{core}', [
             ph(),
             ('device_type', cstr('cpu')),
             ('compatible', cstr('qcom,kryo260') + cstr('qcom,kryo470') + cstr('ARM,v8')),
-            ('reg', u32(core if qemu else 0x100 | core)),  # actual MPIDR Aff1:Aff0, NOT logical ID
+            ('reg', u32(core if qemu else mpidr)),  # actual MPIDR Aff1:Aff0, NOT logical ID
             ('cpu-id', u32(core)),   # descriptive: XNU assigns IDs by DT order
-            ('cluster-id', u32(0)),  # descriptive; see ml_parse_cpu_topology
-            ('cluster-type', u32(0)),  # homogeneous CLUSTER_TYPE_SMP, not AMP
+            ('cluster-id', u32(cluster)),  # descriptive; see ml_parse_cpu_topology
+            ('cluster-type', u32(ctype)),  # 0 = CLUSTER_TYPE_SMP; 'P'/'E' with --amp
             ('die-cluster-id', u32(0)),
-            ('cluster-core-id', u32(core)),
-            ('l2-cache-id', u32(0)),  # gold L2
+            ('cluster-core-id', u32(core & 3)),
+            ('l2-cache-id', u32(cluster)),  # gold / silver L2
             ('l3-cache-id', u32(0)),
             ('state', cstr('running' if core == 0 else 'stopped')),
             ('timebase-frequency', u32(timebase)),
-            ('clock-frequency', u32(2803200000)),
+            ('clock-frequency', u32(1804800000 if cluster else 2803200000)),
             ('bus-frequency', u32(100000000)),
             ('memory-frequency', u32(1866000000)),
             ('peripheral-frequency', u32(timebase)),
@@ -287,7 +293,8 @@ if __name__ == '__main__':
         b, s = sys.argv[sys.argv.index('--mem') + 1].split(':')
         mem = (int(b, 0), int(s, 0))
     root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv,
-                 native='--native' in sys.argv, midmem='--midmem' in sys.argv, mem=mem)
+                 native='--native' in sys.argv, midmem='--midmem' in sys.argv, mem=mem,
+                 amp='--amp' in sys.argv)
     blob = adt.serialize(root)
     open(sys.argv[1], 'wb').write(blob)
     if '--dump' in sys.argv:

@@ -186,7 +186,10 @@ static void test_gic(void);
  */
 static void gold_gicr_prepare(void)
 {
-	for (uint32_t aff = 0x101; aff <= 0x103; aff++) {
+	/* spes: the silver cores too (0x0-0x3), for a 4K-page AMP kernel that starts them (mkadt --amp) */
+	static const uint32_t affs[] = {0x101, 0x102, 0x103, 0x0, 0x1, 0x2, 0x3};
+	for (unsigned k = 0; k < sizeof(affs) / sizeof(affs[0]); k++) {
+		uint32_t aff = affs[k];
 		uintptr_t r = 0;
 		for (uintptr_t off = 0; off < GICR_SIZE; off += GICR_PE_SIZE) {
 			uint64_t typer = rd64(GICR_BASE + off + GICR_TYPER);
@@ -266,9 +269,14 @@ static void gold_cpufreq_max(void)
 	con_hex2("CPUFREQ", "old=", old, "mhz=", best_khz / 1000);
 }
 
+static volatile uint32_t gold_up;
+
 static void __attribute__((noreturn)) gold_main(uint64_t dtb)
 {
 	uint64_t mmfr0 = rsr("id_aa64mmfr0_el1");
+
+	gold_up = 1;	/* the silver boot CPU may switch itself off now */
+	__asm__ volatile("dsb sy; sev" ::: "memory");
 
 	con_hex2("GOLD", "midr=", (uint32_t)rsr("midr_el1"), "mpidr=", (uint32_t)rsr("mpidr_el1"));
 	con_hex2("MMFR0", "lo=", (uint32_t)mmfr0, "tg16=", (mmfr0 >> 20) & 0xf);
@@ -532,6 +540,15 @@ void shim_main(uint64_t dtb)
 		__asm__ volatile("dsb sy" ::: "memory");
 		int64_t r = smc(PSCI_CPU_ON, 0x100, (uintptr_t)secondary_entry, 4);
 		if (r == 0) {
+			/*
+			 * spes: once gold runs, leave through PSCI CPU_OFF instead of
+			 * parking, so a 4K-page AMP xnu can CPU_ON silver 0x0 like the
+			 * other silver cores (a parked core answers ALREADY_ON).
+			 */
+			for (int i = 0; i < 2000 && !gold_up; i++)
+				delay_ms(1);
+			if (gold_up)
+				smc(PSCI_CPU_OFF, 0, 0, 0);
 			for (;;)	/* parked with DAIF masked (start.S) */
 				__asm__ volatile("wfi");
 		}
