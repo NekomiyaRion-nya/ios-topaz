@@ -1,0 +1,529 @@
+From dfcd22bede06ccce73799efeb6eec3bdbacdd0d8 Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 21:24:40 +0900
+Subject: [PATCH] spes-0163: L9A through the RPM: minimal polled GLINK (RPM
+ message RAM) + SMD RPM client (sweet_rpm.c), ldoa9 1.8 V in the active and
+ sleep sets; list the SID 0 regulator PPIDs APPS can see
+
+---
+ bsd/conf/files        |   1 +
+ bsd/dev/sweet_keys.c  |   9 +
+ bsd/dev/sweet_rpm.c   | 446 ++++++++++++++++++++++++++++++++++++++++++
+ bsd/dev/sweet_touch.c |   9 +-
+ 4 files changed, 463 insertions(+), 2 deletions(-)
+ create mode 100644 bsd/dev/sweet_rpm.c
+
+diff --git a/bsd/conf/files b/bsd/conf/files
+index c2864ab..231b885 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -112,6 +112,7 @@ bsd/dev/topaz_sta.c		standard
+ bsd/dev/sweet_sample.c			standard
+ bsd/dev/sweet_keys.c			standard
+ bsd/dev/sweet_touch.c			standard
++bsd/dev/sweet_rpm.c			standard
+ bsd/dev/sweet_i2c1.c			standard
+ bsd/dev/sweet_cpufreq.c			standard
+ bsd/dev/topaz_fw.c			standard
+diff --git a/bsd/dev/sweet_keys.c b/bsd/dev/sweet_keys.c
+index be78055..73dde38 100644
+--- a/bsd/dev/sweet_keys.c
++++ b/bsd/dev/sweet_keys.c
+@@ -148,6 +148,15 @@ sweet_pmic_l9a_on(void)
+ 	printf("SWEET L9A: apid=%u owner=%u read=%d type=%#x status=%#x vset=%u mV mode=%#x en=%#x\n",
+ 	    apid, apid == KEYS_NO_APID ? 9u : keys_rd(keys_cnfg, 0x700u + 4u * apid) & 7u,
+ 	    ok, type, status, mv, mode, en);
++	if (apid == KEYS_NO_APID) {
++		/* which SID 0 regulator-range peripherals (0x14-0x5f) APPS can see at all */
++		for (uint32_t i = 0; i < count && i < 512u; ++i) {
++			uint32_t map = keys_rd(keys_core, 0x900u + 4u * i), ppid = (map >> 8) & 0xfffu;
++			if (map != 0 && ppid >= 0x014u && ppid <= 0x05fu) {
++				printf("SWEET L9A: apid %u ppid %#x owner %u\n", i, ppid, keys_rd(keys_cnfg, 0x700u + 4u * i) & 7u);
++			}
++		}
++	}
+ 	if (!ok || type != 0x21u || mv < 1700u || mv > 1950u) {
+ 		printf("SWEET L9A: not a 1.8 V LDO as expected; left alone\n");
+ 		return false;
+diff --git a/bsd/dev/sweet_rpm.c b/bsd/dev/sweet_rpm.c
+new file mode 100644
+index 0000000..e0456c6
+--- /dev/null
++++ b/bsd/dev/sweet_rpm.c
+@@ -0,0 +1,446 @@
++/*
++ * spes (SM6225 khaje): a minimal RPM client, polled, for one request at a
++ * time: GLINK over the RPM message RAM (Linux qcom_glink_rpm.c and
++ * qcom_glink_native.c, intentless), channel "rpm_requests", SMD RPM
++ * key/value requests (qcom_smd_rpm.c, qcom_smd-regulator.c).
++ * The PM6125 LDOs belong to the RPM: they are not in the APPS SPMI arbiter's
++ * table, so the touch IC's vcc_i2c (L9A) can only be switched on this way.
++ * khaje DT: rpm-msg-ram 0x45f0000 + 0x7000, apcs-hmss-global 0xf111000
++ * (IPC bit 0 at +8 rings the RPM), RPM IRQ not used (we poll).
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/errno.h>
++#include <kern/clock.h>
++#include <kern/locks.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++int sweet_rpm_ldoa(unsigned id, unsigned uv, bool on);
++
++#define RPM_MSGRAM_PA   0x045f0000u
++#define RPM_MSGRAM_SIZE 0x7000u
++#define RPM_IPC_PA      0x0f111000u
++#define RPM_IPC_OFF     0x8u
++#define RPM_TOC_SIZE    256u
++#define RPM_TOC_MAGIC   0x67727430u     /* grt0 */
++#define RPM_TX_FIFO_ID  0x61703272u     /* ap2r */
++#define RPM_RX_FIFO_ID  0x72326170u     /* r2ap */
++
++#define CMD_VERSION         0u
++#define CMD_VERSION_ACK     1u
++#define CMD_OPEN            2u
++#define CMD_CLOSE           3u
++#define CMD_OPEN_ACK        4u
++#define CMD_INTENT          5u
++#define CMD_TX_DATA         9u
++#define CMD_CLOSE_ACK       11u
++#define CMD_TX_DATA_CONT    12u
++
++#define RPM_CHANNEL     "rpm_requests"
++#define RPM_LCID        1u
++#define RPM_REQUEST     0x00716572u     /* "req" */
++#define RPM_MSG_ERR     0x00727265u     /* "err" */
++#define RPM_KEY_SWEN    0x6e657773u     /* "swen" */
++#define RPM_KEY_UV      0x00007675u     /* "uv" */
++#define RPM_TYPE_LDOA   0x616f646cu     /* "ldoa" */
++
++static struct {
++	vm_offset_t ram, ipc;
++	uint32_t rx_off, rx_len, tx_off, tx_len;
++	bool mapped, up, opened, remote_open, failed;
++	uint16_t rcid;
++	uint32_t msg_id;
++	unsigned logged;
++	/* last TX_DATA from the RPM */
++	uint8_t resp[64];
++	unsigned resp_len;
++	bool got_resp;
++} rpm;
++
++static uint32_t
++rpm_rd(uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(rpm.ram + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return v;
++}
++
++static void
++rpm_wr(uint32_t off, uint32_t v)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(rpm.ram + off) = v;
++}
++
++static void
++rpm_kick(void)
++{
++	__asm__ volatile("dsb osh" ::: "memory");
++	*(volatile uint32_t *)(rpm.ipc + RPM_IPC_OFF) = 1u;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
++/* Pipes: tail at +0, head at +4, data at +8 (glink_rpm_parse_toc). */
++static uint32_t
++rpm_rx_avail(void)
++{
++	uint32_t head = rpm_rd(rpm.rx_off + 4u), tail = rpm_rd(rpm.rx_off);
++	if (head >= rpm.rx_len || tail >= rpm.rx_len) {
++		rpm.failed = true;
++		return 0;
++	}
++	return head >= tail ? head - tail : rpm.rx_len - tail + head;
++}
++
++static void
++rpm_rx_peek(uint32_t offset, void *buf, uint32_t count)
++{
++	uint32_t tail = rpm_rd(rpm.rx_off) + offset;
++	uint8_t *dst = buf;
++	for (uint32_t i = 0; i < count; i += 4u) {
++		uint32_t pos = (tail + i) % rpm.rx_len;
++		uint32_t v = rpm_rd(rpm.rx_off + 8u + pos);
++		uint32_t n = count - i < 4u ? count - i : 4u;
++		memcpy(dst + i, &v, n);
++	}
++}
++
++static void
++rpm_rx_advance(uint32_t count)
++{
++	uint32_t tail = rpm_rd(rpm.rx_off) + count;
++	if (tail >= rpm.rx_len) {
++		tail -= rpm.rx_len;
++	}
++	rpm_wr(rpm.rx_off, tail);
++}
++
++static uint32_t
++rpm_tx_avail(void)
++{
++	uint32_t head = rpm_rd(rpm.tx_off + 4u), tail = rpm_rd(rpm.tx_off);
++	if (head >= rpm.tx_len || tail >= rpm.tx_len) {
++		rpm.failed = true;
++		return 0;
++	}
++	return tail <= head ? rpm.tx_len - head + tail : tail - head;
++}
++
++/* hdr and data are word multiples; the packet is padded to 8 bytes. */
++static bool
++rpm_tx(const void *hdr, uint32_t hlen, const void *data, uint32_t dlen)
++{
++	uint8_t pkt[128];
++	uint32_t total = (hlen + dlen + 7u) & ~7u;
++	if (total > sizeof(pkt) || (hlen & 3u) || (dlen & 3u)) {
++		return false;
++	}
++	memset(pkt, 0, sizeof(pkt));
++	memcpy(pkt, hdr, hlen);
++	if (dlen) {
++		memcpy(pkt + hlen, data, dlen);
++	}
++	for (unsigned i = 0; rpm_tx_avail() <= total; ++i) {
++		if (rpm.failed || i > 1000) {
++			printf("SWEET RPM: tx FIFO full (avail %u)\n", rpm_tx_avail());
++			return false;
++		}
++		delay(1000);
++	}
++	uint32_t head = rpm_rd(rpm.tx_off + 4u);
++	for (uint32_t i = 0; i < total; i += 4u) {
++		uint32_t v;
++		memcpy(&v, pkt + i, 4);
++		rpm_wr(rpm.tx_off + 8u + head, v);
++		head += 4u;
++		if (head >= rpm.tx_len) {
++			head = 0;
++		}
++	}
++	__asm__ volatile("dmb osh" ::: "memory");
++	rpm_wr(rpm.tx_off + 4u, head);
++	rpm_kick();
++	return true;
++}
++
++static bool
++rpm_tx_cmd(uint16_t cmd, uint16_t p1, uint32_t p2)
++{
++	uint32_t msg[2] = {(uint32_t)cmd | ((uint32_t)p1 << 16), p2};
++	return rpm_tx(msg, sizeof(msg), NULL, 0);
++}
++
++/* Handle everything the RPM has queued; false on a protocol surprise. */
++static bool
++rpm_rx_process(void)
++{
++	for (unsigned guard = 0; guard < 64; ++guard) {
++		uint32_t avail = rpm_rx_avail();
++		if (rpm.failed) {
++			printf("SWEET RPM: bad rx pointers\n");
++			return false;
++		}
++		if (avail < 8u) {
++			return true;
++		}
++		uint32_t msg[2];
++		rpm_rx_peek(0, msg, 8);
++		uint32_t cmd = msg[0] & 0xffffu, p1 = msg[0] >> 16, p2 = msg[1];
++		if (rpm.logged++ < 24) {
++			printf("SWEET RPM: rx cmd=%u p1=%u p2=%#x avail=%u\n", cmd, p1, p2, avail);
++		}
++		switch (cmd) {
++		case CMD_VERSION:
++			rpm_rx_advance(8);
++			(void)rpm_tx_cmd(CMD_VERSION_ACK, 1, 0);
++			break;
++		case CMD_VERSION_ACK:
++			rpm_rx_advance(8);
++			rpm.up = true;
++			break;
++		case CMD_OPEN: {
++			uint32_t total = (8u + p2 + 7u) & ~7u;
++			char name[33];
++			if (p2 > 32u) {
++				return false;
++			}
++			if (avail < total) {
++				return true;
++			}
++			memset(name, 0, sizeof(name));
++			rpm_rx_peek(8, name, (p2 + 3u) & ~3u);
++			name[32] = 0;
++			rpm_rx_advance(total);
++			printf("SWEET RPM: remote open '%s' rcid=%u\n", name, p1);
++			if (!strcmp(name, RPM_CHANNEL)) {
++				rpm.rcid = (uint16_t)p1;
++				rpm.remote_open = true;
++				(void)rpm_tx_cmd(CMD_OPEN_ACK, (uint16_t)p1, 0);
++			}
++			break;
++		}
++		case CMD_OPEN_ACK:
++			rpm_rx_advance(8);
++			if (p1 == RPM_LCID) {
++				rpm.opened = true;
++			}
++			break;
++		case CMD_CLOSE:
++			rpm_rx_advance(8);
++			if (p1 == rpm.rcid) {
++				rpm.remote_open = false;
++			}
++			(void)rpm_tx_cmd(CMD_CLOSE_ACK, (uint16_t)p1, 0);
++			break;
++		case CMD_INTENT: {
++			uint32_t total = (8u + 8u * p2 + 7u) & ~7u;
++			if (avail < total) {
++				return true;
++			}
++			rpm_rx_advance(total);
++			break;
++		}
++		case CMD_TX_DATA:
++		case CMD_TX_DATA_CONT: {
++			uint32_t hdr[4];
++			if (avail < 16u) {
++				return true;
++			}
++			rpm_rx_peek(0, hdr, 16);
++			uint32_t chunk = hdr[2];
++			uint32_t total = (16u + chunk + 7u) & ~7u;
++			if (chunk > 0x400u) {
++				return false;
++			}
++			if (avail < total) {
++				return true;
++			}
++			rpm.resp_len = chunk < (uint32_t)sizeof(rpm.resp) ? chunk : (uint32_t)sizeof(rpm.resp);
++			rpm_rx_peek(16, rpm.resp, (rpm.resp_len + 3u) & ~3u);
++			rpm.got_resp = true;
++			rpm_rx_advance(total);
++			break;
++		}
++		case CMD_CLOSE_ACK:
++		case 6: case 7: case 8: case 13: case 14: case 15:
++			rpm_rx_advance(8);
++			break;
++		default:
++			printf("SWEET RPM: unknown rx cmd %u; giving up\n", cmd);
++			return false;
++		}
++	}
++	return true;
++}
++
++static bool
++rpm_wait(bool *flag, unsigned ms)
++{
++	for (unsigned i = 0; i < ms; ++i) {
++		if (!rpm_rx_process()) {
++			return false;
++		}
++		if (*flag) {
++			return true;
++		}
++		delay(1000);
++	}
++	return false;
++}
++
++static bool
++rpm_connect(void)
++{
++	if (rpm.opened && rpm.remote_open) {
++		return true;
++	}
++	if (!rpm.mapped) {
++		rpm.ram = ml_io_map(RPM_MSGRAM_PA, RPM_MSGRAM_SIZE);
++		rpm.ipc = ml_io_map(RPM_IPC_PA, 0x1000);
++		if (!rpm.ram || !rpm.ipc) {
++			printf("SWEET RPM: MMIO mapping failed\n");
++			return false;
++		}
++		uint32_t toc = RPM_MSGRAM_SIZE - RPM_TOC_SIZE;
++		uint32_t magic = rpm_rd(toc), count = rpm_rd(toc + 4u);
++		printf("SWEET RPM: toc magic=%#x count=%u\n", magic, count);
++		if (magic != RPM_TOC_MAGIC || count > 20u) {
++			return false;
++		}
++		for (uint32_t i = 0; i < count; ++i) {
++			uint32_t id = rpm_rd(toc + 8u + 12u * i);
++			uint32_t off = rpm_rd(toc + 12u + 12u * i);
++			uint32_t size = rpm_rd(toc + 16u + 12u * i);
++			printf("SWEET RPM: toc %#x off=%#x size=%#x\n", id, off, size);
++			if (off > RPM_MSGRAM_SIZE || size + off > RPM_MSGRAM_SIZE || size < 64u) {
++				continue;
++			}
++			if (id == RPM_RX_FIFO_ID) {
++				rpm.rx_off = off;
++				rpm.rx_len = size;
++			} else if (id == RPM_TX_FIFO_ID) {
++				rpm.tx_off = off;
++				rpm.tx_len = size;
++			}
++		}
++		if (!rpm.rx_len || !rpm.tx_len) {
++			printf("SWEET RPM: FIFOs not found\n");
++			return false;
++		}
++		/* Linux's GLINK FIFO data is fifo = off + 8 with length = size (glink_rpm_parse_toc). */
++		printf("SWEET RPM: rx tail=%#x head=%#x tx tail=%#x head=%#x\n",
++		    rpm_rd(rpm.rx_off), rpm_rd(rpm.rx_off + 4u), rpm_rd(rpm.tx_off), rpm_rd(rpm.tx_off + 4u));
++		rpm.mapped = true;
++	}
++	if (!rpm.up) {
++		if (!rpm_tx_cmd(CMD_VERSION, 1, 0) || !rpm_wait(&rpm.up, 1000)) {
++			printf("SWEET RPM: no VERSION_ACK\n");
++			return false;
++		}
++	}
++	struct {
++		uint32_t msg[2];
++		char name[16];
++	} open;
++	memset(&open, 0, sizeof(open));
++	open.msg[0] = CMD_OPEN | (RPM_LCID << 16);
++	open.msg[1] = sizeof(RPM_CHANNEL);
++	memcpy(open.name, RPM_CHANNEL, sizeof(RPM_CHANNEL));
++	if (!rpm_tx(&open, 8u + ((sizeof(RPM_CHANNEL) + 3u) & ~3u), NULL, 0) ||
++	    !rpm_wait(&rpm.opened, 1000)) {
++		printf("SWEET RPM: no OPEN_ACK\n");
++		return false;
++	}
++	if (!rpm_wait(&rpm.remote_open, 1000)) {
++		printf("SWEET RPM: the RPM did not open %s\n", RPM_CHANNEL);
++		return false;
++	}
++	return true;
++}
++
++/* One SMD RPM request (set 0 active, 1 sleep); 0 when the RPM acknowledged it without an error. */
++static int
++rpm_request(uint32_t set, uint32_t type, uint32_t id, const uint32_t *kv, uint32_t kvlen)
++{
++	struct {
++		uint32_t service, length;               /* qcom_rpm_header */
++		uint32_t msg_id, flags, type, id, len;  /* qcom_rpm_request */
++		uint32_t kv[6];
++	} req;
++	struct {
++		uint32_t msg[2];
++		uint32_t chunk, left;
++	} hdr;
++	if (kvlen > sizeof(req.kv)) {
++		return EINVAL;
++	}
++	memset(&req, 0, sizeof(req));
++	req.service = RPM_REQUEST;
++	req.length = 20u + kvlen;
++	req.msg_id = ++rpm.msg_id;
++	req.flags = set;
++	req.type = type;
++	req.id = id;
++	req.len = kvlen;
++	memcpy(req.kv, kv, kvlen);
++	uint32_t len = 28u + kvlen;
++	hdr.msg[0] = CMD_TX_DATA | (RPM_LCID << 16);
++	hdr.msg[1] = 0;                 /* intentless: no intent id */
++	hdr.chunk = len;
++	hdr.left = 0;
++	rpm.got_resp = false;
++	if (!rpm_tx(&hdr, sizeof(hdr), &req, len) || !rpm_wait(&rpm.got_resp, 1000)) {
++		printf("SWEET RPM: no answer to request %u\n", req.msg_id);
++		return ETIMEDOUT;
++	}
++	/* qcom_smd_rpm_callback: header, then (type, length, payload) records */
++	uint32_t w[16];
++	memset(w, 0, sizeof(w));
++	memcpy(w, rpm.resp, rpm.resp_len);
++	printf("SWEET RPM: answer len=%u %08x %08x %08x %08x %08x %08x\n",
++	    rpm.resp_len, w[0], w[1], w[2], w[3], w[4], w[5]);
++	if (w[0] != RPM_REQUEST) {
++		return EIO;
++	}
++	for (unsigned i = 2; i + 1 < rpm.resp_len / 4u;) {
++		uint32_t mtype = w[i], mlen = w[i + 1];
++		if (mtype == RPM_MSG_ERR) {
++			char text[33];
++			memset(text, 0, sizeof(text));
++			memcpy(text, &w[i + 2], mlen < 32u ? mlen : 32u);
++			printf("SWEET RPM: error '%s'\n", text);
++			return EIO;
++		}
++		i += 2u + (mlen + 3u) / 4u;
++	}
++	return 0;
++}
++
++static lck_grp_t *rpm_lck_grp;
++static lck_mtx_t *rpm_lock;
++
++/* Vote an "ldoa" regulator on or off in both RPM sets; 0 on success. */
++int
++sweet_rpm_ldoa(unsigned id, unsigned uv, bool on)
++{
++	if (!rpm_lock) {
++		rpm_lck_grp = lck_grp_alloc_init("sweet_rpm", LCK_GRP_ATTR_NULL);
++		rpm_lock = lck_mtx_alloc_init(rpm_lck_grp, LCK_ATTR_NULL);
++	}
++	lck_mtx_lock(rpm_lock);
++	int err = EIO;
++	if (rpm_connect()) {
++		const uint32_t kv[6] = {RPM_KEY_SWEN, 4, on ? 1u : 0u, RPM_KEY_UV, 4, uv};
++		err = rpm_request(0, RPM_TYPE_LDOA, id, kv, sizeof(kv));
++		if (!err) {
++			err = rpm_request(1, RPM_TYPE_LDOA, id, kv, sizeof(kv));
++		}
++	}
++	printf("SWEET RPM: ldoa%u %s %u uV -> %d\n", id, on ? "on" : "off", uv, err);
++	lck_mtx_unlock(rpm_lock);
++	return err;
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 9225689..8e99928 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -25,6 +25,7 @@ extern kern_return_t thread_terminate(thread_t);
+ extern int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
+ extern void sweet_hid_touch(int finger, int down, int x, int y);
+ extern bool sweet_pmic_l9a_on(void);   /* sweet_keys.c (spes) */
++extern int sweet_rpm_ldoa(unsigned id, unsigned uv, bool on);   /* sweet_rpm.c (spes) */
+ void sweet_touch_init(void);
+ 
+ #define TOUCH_SE_PA      0x04a88000u /* QUP0 SE2 */
+@@ -842,8 +843,12 @@ touch_thread(void *arg, wait_result_t result)
+ 	{
+ 		int l9a = 1;
+ 		(void)PE_parse_boot_argn("sweettouchl9a", &l9a, sizeof(l9a));
+-		printf("SWEET TOUCH: L9A %s\n", !l9a ? "left alone (sweettouchl9a=0)" :
+-		    sweet_pmic_l9a_on() ? "on" : "NOT on");
++		bool on = false;
++		if (l9a) {
++			/* SPMI only if APPS owns it; otherwise ask the RPM, as Linux's rpm-smd-regulator does */
++			on = sweet_pmic_l9a_on() || sweet_rpm_ldoa(9, 1800000, true) == 0;
++		}
++		printf("SWEET TOUCH: L9A %s\n", !l9a ? "left alone (sweettouchl9a=0)" : on ? "on" : "NOT on");
+ 	}
+ 	touch_wait(10);
+ 	touch_stage("power: i2c pins");
+-- 
+2.52.0.windows.1
+
