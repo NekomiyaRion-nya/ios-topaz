@@ -73,3 +73,8 @@ boot_a/boot_b hold `spes-boot.img` (the iOS shim) since 2026-10-22, so a normal 
   reads as Group 0 / RAZ from the non-secure side. Next: trace the NACK/abort paths (0157, image `spes-tt17.img`).
 - ABL fastboot drops off USB after a few idle minutes: the test loop now parks the phone in iOS and asks for fastboot
   over UDP (`tools/phone-fastboot.sh`).
+- 2026-10-22 GPU **G1 passed** (`spes-gpu.img`, log `logs/gpu3.txt`): GX/CX GDSC up, zap shader via TZ PAS 13
+  (init_image / mem_setup / auth_and_reset all 0), SMMU CB0 pass-through, SQE + CP_ME_INIT, and
+  `CP_MEM_WRITE` came back as `0xC0FFEE00`: the Adreno 610 executes our command stream. No SMMU fault
+  (CB0 FSR 0x400 is only FORMAT=AArch64), iOS kept running until `sweetautoreboot`. (The earlier `gpu2` log
+  was the parked boot image, not the GPU image.)
