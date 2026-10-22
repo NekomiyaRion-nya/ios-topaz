@@ -1,0 +1,33 @@
+From b94b179422883e1f82496152171e64c1788e29f7 Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 23:27:08 +0900
+Subject: [PATCH] spes-0963: log the first 300 touch contacts going down/up
+ with coordinates
+
+---
+ bsd/dev/sweet_touch.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 666d4a8..e96fce2 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -752,6 +752,15 @@ touch_report(uint32_t mask, const int *x, const int *y)
+ {
+ 	for (unsigned id = 0; id < TOUCH_MAX; ++id) {
+ 		uint32_t bit = 1u << id;
++		/* spes: log contacts going down and up (the first 300 events) */
++		static unsigned logged;
++		if ((mask & bit) && !(st.active & bit) && logged < 300) {
++			logged++;
++			printf("SWEET TOUCH: down id=%u x=%d y=%d (raw mode %u)\n", id, x[id], y[id], touch_mode);
++		} else if (!(mask & bit) && (st.active & bit) && logged < 300) {
++			logged++;
++			printf("SWEET TOUCH: up id=%u last x=%d y=%d\n", id, st.x[id], st.y[id]);
++		}
+ 		if (mask & bit) {
+ 			if (!(st.active & bit) || x[id] != st.x[id] || y[id] != st.y[id]) {
+ 				sweet_hid_touch((int)id, 1, x[id], y[id]);
+-- 
+2.52.0.windows.1
+

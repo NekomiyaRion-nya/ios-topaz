@@ -97,3 +97,17 @@ boot_a/boot_b hold `spes-boot.img` (the iOS shim) since 2026-10-22, so a normal 
   second of the log was never flushed, and `sweethwwdt` brought the phone back: that was the "SoC freeze".
   GENI SE2 itself works (clean NACKs). Real problem: the IC does not answer -> its vcc_i2c (L9A, used otherwise
   only by BT IO and the codec) is off after ABL. 0162 turns it on. Images: `spes-touch.img` / `spes-touchnol9a.img`.
+
+## 2026-10-22 23:25: TOUCH WORKS on spes
+
+- Root cause: **GPIO98 (touch AVDD enable) is an eGPIO** on khaje (CFG bit 11 EGPIO_PRESENT). TLMM must set
+  EGPIO_ENABLE (bit 12) to own the pad (pinctrl-msm.c msm_pinmux_set_mux); without it the output never left the
+  SoC, the IC had no power, nothing ACKed on the bus (0961 bit-banged scan) and IRQ never moved. 0962 claims eGPIO
+  pins in `touch_gpio`. L9A (vcc_i2c) is also voted on via the RPM (0960, `sweet_rpm.c`, GLINK in RPM msg RAM).
+- The IC answers **54:52** (FT5452 id, fw 0x17, vendor 0x48) at 0x38, not 34:18, but reports in panel pixels
+  (1080x2400), so spes needs `sweettouchmode=1` (topaz's 1.25x scaling put the bottom edge at y=1919).
+- Phone reached the home screen by touch. Local WSL kernel builds (hackinOS/xnu-linux, ~25 s incremental) are used
+  from here on (`K=xnu/out-local/... tools/mkspes-boot.sh`); they differ from CI in codegen (clang-17) and
+  kalloc_type signatures.
+- ABL refused `fastboot boot` with "Load Error" once current-slot had become b (slot b unbootable after the parked
+  iOS never marks boot success): `fastboot set_active a` fixed it.

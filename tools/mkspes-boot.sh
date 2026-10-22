@@ -6,7 +6,7 @@
 #   shim/out/spes-touchstep.img debug, touch steps logged 1.5 s apart, log flushed every 1 s
 set -euo pipefail
 cd "$(dirname "$0")/.."
-K=xnu/out/kernel.development.sweet
+K=${K:-xnu/out/kernel.development.sweet}   # K=... to use another kernel (e.g. a local xnu-linux build)
 COMMON='debug=0xc serial=3 cpus=4 keepsyms=1 -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_hz=30 sweetusb=2 sweetchg=0'
 # sweettouchdiag=1 is not in COMMON: when the probe finds no IC it panics on purpose, the panic is
 # only drawn on screen and the unflushed log looked like a SoC freeze (2026-10-22).
@@ -26,7 +26,7 @@ build touchstep "$COMMON $AUTO ufslogsecs=1 sweettouchstep=1500 sweettouchdelay=
 build usb "$COMMON $AUTO sweettouch=0 sweetusb=2"
 build battery "$COMMON $AUTO sweettouch=0 sweetbattery=1"
 # touch with the FT3418 power sequence of 0162 (L9A on); step log to see each stage
-build touch "$COMMON $AUTO ufslogsecs=1 sweettouchstep=300 sweettouchdelay=20 sweettouchbb=1"
+build touch "$COMMON $AUTO ufslogsecs=1 sweettouchdelay=20 sweettouchmode=1"
 build touchnol9a "$COMMON $AUTO ufslogsecs=1 sweettouchstep=300 sweettouchdelay=20 sweettouchl9a=0"
 # PROBE: extra boot-args for one investigation run (tools/spes-cycle.sh)
 build probe "$COMMON $AUTO sweettouch=0 ${PROBE:-}"
