@@ -1,0 +1,215 @@
+From 830168d0e9b60f3570cd58faaae523f9e7420d3a Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 22:43:58 +0900
+Subject: [PATCH] spes-0961: sweettouchbb=1 touch bus diagnostics without GENI:
+ line levels with and without pull-ups, bit-banged I2C scan and FT id read on
+ GPIO 6/7, IRQ activity for 400 ms after the reset release
+
+---
+ bsd/dev/sweet_touch.c | 183 +++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 182 insertions(+), 1 deletion(-)
+
+diff --git a/bsd/dev/sweet_touch.c b/bsd/dev/sweet_touch.c
+index 8e99928..68d3469 100644
+--- a/bsd/dev/sweet_touch.c
++++ b/bsd/dev/sweet_touch.c
+@@ -190,6 +190,178 @@ touch_gpio(unsigned pin, unsigned mux, unsigned pull, unsigned drive, bool out,
+ 	touch_wr(tile, off, cfg);
+ }
+ 
++/*
++ * spes: sweettouchbb=1 diagnostics without GENI. GPIO 6/7 as plain GPIOs,
++ * open drain by output enable (OUT latch 0; OE on = low, off = released to
++ * the pull-ups), ~100 kHz. Answers "does anything ACK on the touch bus" on
++ * its own, independent of the SE2 setup.
++ */
++#define BB_SDA 6u
++#define BB_SCL 7u
++
++static void
++bb_line(unsigned pin, bool low)
++{
++	uint32_t off = TOUCH_GPIO_CFG(pin);
++	uint32_t cfg = touch_rd(st.west, off);
++	cfg = low ? (cfg | 0x200u) : (cfg & ~0x200u);
++	touch_wr(st.west, off, cfg);
++	delay(5);
++}
++
++static bool
++bb_get(unsigned pin)
++{
++	return touch_rd(st.west, TOUCH_GPIO_IO(pin)) & 1u;
++}
++
++static bool
++bb_scl_high(void)
++{
++	bb_line(BB_SCL, false);
++	for (unsigned i = 0; i < 1000 && !bb_get(BB_SCL); ++i) {
++		delay(1);       /* clock stretching */
++	}
++	return bb_get(BB_SCL);
++}
++
++static void
++bb_start(void)
++{
++	bb_line(BB_SDA, false);
++	(void)bb_scl_high();
++	bb_line(BB_SDA, true);
++	bb_line(BB_SCL, true);
++}
++
++static void
++bb_stop(void)
++{
++	bb_line(BB_SDA, true);
++	(void)bb_scl_high();
++	bb_line(BB_SDA, false);
++}
++
++/* true when the byte was ACKed */
++static bool
++bb_write(uint8_t v)
++{
++	for (int b = 7; b >= 0; --b) {
++		bb_line(BB_SDA, !((v >> b) & 1u));
++		(void)bb_scl_high();
++		bb_line(BB_SCL, true);
++	}
++	bb_line(BB_SDA, false);
++	(void)bb_scl_high();
++	bool ack = !bb_get(BB_SDA);
++	bb_line(BB_SCL, true);
++	return ack;
++}
++
++static uint8_t
++bb_read(bool ack)
++{
++	uint8_t v = 0;
++	bb_line(BB_SDA, false);
++	for (int b = 7; b >= 0; --b) {
++		(void)bb_scl_high();
++		v = (uint8_t)((v << 1) | (bb_get(BB_SDA) ? 1u : 0u));
++		bb_line(BB_SCL, true);
++	}
++	bb_line(BB_SDA, ack);
++	(void)bb_scl_high();
++	bb_line(BB_SCL, true);
++	bb_line(BB_SDA, false);
++	return v;
++}
++
++/* reg read: START addr|W reg, rSTART addr|R data NACK STOP; -1 on a missing ACK */
++static int
++bb_read_reg(uint8_t addr, uint8_t reg)
++{
++	bb_start();
++	bool a1 = bb_write((uint8_t)(addr << 1));
++	bool a2 = a1 && bb_write(reg);
++	int v = -1;
++	if (a2) {
++		bb_line(BB_SDA, false);
++		bb_start();
++		if (bb_write((uint8_t)((addr << 1) | 1u))) {
++			v = bb_read(false);
++		}
++	}
++	bb_stop();
++	return v;
++}
++
++static void
++touch_bb_diag(void)
++{
++	/* plain GPIO, pull-up (in case the board's pull-ups are on a dead rail), 2 mA, OUT latch 0 */
++	for (unsigned pin = BB_SDA; pin <= BB_SCL; ++pin) {
++		touch_wr(st.west, TOUCH_GPIO_IO(pin), touch_rd(st.west, TOUCH_GPIO_IO(pin)) & ~2u);
++		touch_wr(st.west, TOUCH_GPIO_CFG(pin), (touch_rd(st.west, TOUCH_GPIO_CFG(pin)) & ~0x3ffu) | 3u);
++	}
++	delay(100);
++	bool sda_pu = bb_get(BB_SDA), scl_pu = bb_get(BB_SCL);
++	/* the same with the internal pull-ups off: does the board pull them up? */
++	for (unsigned pin = BB_SDA; pin <= BB_SCL; ++pin) {
++		touch_wr(st.west, TOUCH_GPIO_CFG(pin), touch_rd(st.west, TOUCH_GPIO_CFG(pin)) & ~3u);
++	}
++	delay(100);
++	bool sda_nopu = bb_get(BB_SDA), scl_nopu = bb_get(BB_SCL);
++	for (unsigned pin = BB_SDA; pin <= BB_SCL; ++pin) {
++		touch_wr(st.west, TOUCH_GPIO_CFG(pin), touch_rd(st.west, TOUCH_GPIO_CFG(pin)) | 3u);
++	}
++	delay(100);
++	printf("SWEET TOUCH: bb lines sda=%d scl=%d (internal pull-up) sda=%d scl=%d (no pull) | irq=%u reset=%#x avdd=%#x/%#x\n",
++	    sda_pu, scl_pu, sda_nopu, scl_nopu,
++	    touch_rd(st.west, TOUCH_GPIO_IO(TOUCH_PIN_IRQ)) & 1u,
++	    touch_rd(st.west, TOUCH_GPIO_IO(TOUCH_PIN_RESET)),
++	    touch_rd(st.avdd, TOUCH_GPIO_CFG(TOUCH_PIN_AVDD)), touch_rd(st.avdd, TOUCH_GPIO_IO(TOUCH_PIN_AVDD)));
++	bb_stop();
++	char acks[128];
++	unsigned n = 0;
++	for (unsigned a = 0x08; a < 0x78 && n + 6 < sizeof(acks); ++a) {
++		bb_start();
++		bool ack = bb_write((uint8_t)(a << 1));
++		bb_stop();
++		if (ack) {
++			n += (unsigned)snprintf(acks + n, sizeof(acks) - n, " %02x", a);
++		}
++	}
++	acks[n] = 0;
++	printf("SWEET TOUCH: bb scan ACKs:%s\n", n ? acks : " none");
++	int id1 = bb_read_reg(0x38, 0xa3), id2 = bb_read_reg(0x38, 0x9f);
++	printf("SWEET TOUCH: bb 0x38 a3=%d 9f=%d\n", id1, id2);
++	/* back to qup2 (as touch_thread sets them) */
++	touch_gpio(BB_SDA, 1, 0, 0, false, false);
++	touch_gpio(BB_SCL, 1, 0, 0, false, false);
++}
++
++/* IRQ (GPIO80) after the reset release: a running FocalTech firmware toggles it */
++static void
++touch_irq_watch(unsigned ms)
++{
++	unsigned lows = 0, edges = 0, first_low = 0;
++	unsigned last = touch_rd(st.west, TOUCH_GPIO_IO(TOUCH_PIN_IRQ)) & 1u;
++	for (unsigned t = 1; t <= ms; ++t) {
++		delay(1000);
++		unsigned v = touch_rd(st.west, TOUCH_GPIO_IO(TOUCH_PIN_IRQ)) & 1u;
++		if (!v) {
++			if (!lows++) {
++				first_low = t;
++			}
++		}
++		if (v != last) {
++			edges++;
++		}
++		last = v;
++	}
++	printf("SWEET TOUCH: irq after reset: %u ms low of %u, %u edges, first low at %u ms, now %u\n",
++	    lows, ms, edges, first_low, last);
++}
++
+ static bool
+ touch_clocks(void)
+ {
+@@ -861,7 +1033,16 @@ touch_thread(void *arg, wait_result_t result)
+ 	if (!(touch_test & 8u)) {
+ 		touch_gpio(TOUCH_PIN_RESET, 0, 3, 3, true, true);
+ 	}
+-	touch_wait(250);
++	{
++		int bb = 0;
++		(void)PE_parse_boot_argn("sweettouchbb", &bb, sizeof(bb));
++		if (bb) {
++			touch_irq_watch(400);
++			touch_bb_diag();
++		} else {
++			touch_wait(250);
++		}
++	}
+ 	touch_stage("probe");
+ 	uint8_t gid[32] = {0}, legacy[32] = {0}, fid1 = 0, fid2 = 0;
+ 	st.probing = true;
+-- 
+2.52.0.windows.1
+
