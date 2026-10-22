@@ -23,11 +23,12 @@ for job in gpu1:spes-gpu.img amp1:spes-touch-amp.img wifi1:spes-wifi.img; do
 	name=${job%%:*} img=${job#*:}
 	L0=$(wc -l < "$HACK/logs/live.txt")
 	log "=== $name ($img)"
-	bash "$HACK/tools/spes-cycle.sh" "$HACK/ios-spes/shim/out/$img" "$name" 600
+	PARK=0 bash "$HACK/tools/spes-cycle.sh" "$HACK/ios-spes/shim/out/$img" "$name" 600
 	rc=$?
 	tail -n +"$L0" "$HACK/logs/live.txt" > "$HACK/logs/$name.live.txt"
 	log "$name finished rc=$rc"
 	[ $rc -eq 5 ] || [ $rc -eq 3 ] || [ $rc -eq 2 ] && { log "stopping (rc=$rc)"; break; }
-	sleep 90   # parked iOS comes up before the next cycle asks it for fastboot
 done
+# the phone stays in fastboot between the tests (no parking): back to the everyday iOS now
+"$PT/fastboot.exe" reboot 2>&1 | tail -1
 log "done"

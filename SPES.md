@@ -128,3 +128,9 @@ boot_a/boot_b hold `spes-boot.img` (the iOS shim) since 2026-10-22, so a normal 
   before launchd (only when changed) - no userdata flash needed.
 - Night of 10-22/23: after flashing the touch-enabled everyday image to boot_a/b (23:55, CI kernel 0962) the phone
   did not show up on USB again (no fastboot, no USB Ethernet); needs a look in the morning.
+- **Wi-Fi** (0966, `spes-wifi.img`, boot-args `modem=1 wifi=1`): TopazModem's firmware tables regenerated from this
+  phone's modem_a (`tools/modem-fwtable.py backup-spes-20261021/modem_a.img`: 611 files under /image, each one
+  extent; modem_a == modem_b) and the 16 MB modem pool moved to 0x70000000 (topaz' 0xE0000000 is kernel RAM on
+  spes; first-bank fixed carve-outs end at 0x63900000, bank ends 0x7DD00000). Untested.
+- `tools/overnight-tests.sh`: waits for the phone, runs gpu1 / amp1 / wifi1 (logs/NAME.txt + NAME.live.txt),
+  stays in fastboot between them, then reboots into the boot-partition iOS.
