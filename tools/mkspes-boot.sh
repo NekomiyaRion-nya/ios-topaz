@@ -28,5 +28,5 @@ done
 build gpu "$COMMON $AUTO sweettouch=0 sweetgpu=1 sweetgpudelay=40"   # Adreno 610 G1 test (0160)
 # PROBE: extra boot-args for one investigation run (tools/spes-cycle.sh)
 build probe "$COMMON $AUTO sweettouch=0 ${PROBE:-}"
-build boot "$COMMON sweetfb_noconsole=1 sweettouch=0"
+build boot "$COMMON sweetfb_noconsole=1 sweettouch=0 sweetautoreboot=900 sweethwwdt=20"   # parked between test cycles: back to fastboot after 15 min
 ls -l shim/out/spes-*.img
