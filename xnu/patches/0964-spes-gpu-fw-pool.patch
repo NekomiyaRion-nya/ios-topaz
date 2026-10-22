@@ -1,0 +1,120 @@
+From 7d356d5c0010587cf3adc220d0b988966723122e Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Thu, 22 Oct 2026 23:57:36 +0900
+Subject: [PATCH] spes-0964: GPU on spes: zap and SQE from the phone's own
+ firmware in the ADT (/arm-io/sweet-gpu) before the embedded topaz copies;
+ never hand out topaz's middle-bank pool when it overlaps kernel RAM (spes:
+ RAM from 0x80000000)
+
+---
+ iokit/Kernel/arm/TopazAdreno.cpp | 59 ++++++++++++++++++++++++++++----
+ 1 file changed, 52 insertions(+), 7 deletions(-)
+
+diff --git a/iokit/Kernel/arm/TopazAdreno.cpp b/iokit/Kernel/arm/TopazAdreno.cpp
+index 16da336..4586772 100644
+--- a/iokit/Kernel/arm/TopazAdreno.cpp
++++ b/iokit/Kernel/arm/TopazAdreno.cpp
+@@ -23,6 +23,9 @@
+ #include <pexpert/pexpert.h>
+ #include <kern/thread.h>
+ #include <mach/mach_time.h>
++#include <IOKit/IORegistryEntry.h>
++#include <IOKit/IODeviceTreeSupport.h>
++#include <libkern/c++/OSData.h>
+ 
+ extern "C" {
+ vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+@@ -36,6 +39,7 @@ void RedwoodGPUStart(void);
+ void topaz_adreno_init(void);
+ extern const uint8_t topaz_fw_zap_mdt[], topaz_fw_zap_b02[], topaz_fw_sqe_fw[];
+ extern const size_t topaz_fw_zap_mdt_size, topaz_fw_zap_b02_size, topaz_fw_sqe_fw_size;
++extern unsigned long gPhysBase, gPhysSize;     /* osfmk/arm64/arm_vm_init.c: kernel-managed RAM */
+ 
+ bool redwood_gpu_ready(void);
+ bool redwood_gpu_parameter(uint32_t which, uint64_t *value);
+@@ -249,6 +253,19 @@ topaz_gpu_pool_alloc(uint64_t size, void **va)
+ 	if (size > GPU_POOL_CHUNK - GPU_POOL_UNIT) {
+ 		return 0;
+ 	}
++	/*
++	 * spes: the kernel's RAM starts at 0x80000000 (mkadt --mem), so topaz's pool in the
++	 * "unused" middle bank is the kernel's own memory there: never hand it out.
++	 */
++	if (GPU_POOL_BASE + GPU_POOL_SIZE > gPhysBase && GPU_POOL_BASE < gPhysBase + gPhysSize) {
++		static bool said;
++		if (!said) {
++			said = true;
++			IOLog("TopazGPU: pool %#llx+%#llx overlaps kernel RAM %#lx+%#lx: not used (boot with gpu_midmem=1 gpu_fbpool=0)\n",
++			    GPU_POOL_BASE, GPU_POOL_SIZE, gPhysBase, gPhysSize);
++		}
++		return 0;
++	}
+ 	if (!gpu_pool_ready) {
+ 		/* one range per chunk, a unit short so that neighbours never merge: no buffer crosses a chunk */
+ 		for (uint64_t c = 0; c < GPU_POOL_CHUNKS; c++) {
+@@ -565,6 +582,28 @@ scm(uint32_t fn, uint64_t arginfo, uint64_t a, uint64_t b, uint64_t c, uint64_t
+ 	return args[0];
+ }
+ 
++/*
++ * spes: the phone's own GPU firmware, put into the ADT by mkadt.py (/arm-io/sweet-gpu: zap-mdt,
++ * zap-b02, sqe, from its /vendor/firmware). The zap metadata is signed per device: the embedded
++ * topaz copy differs from spes' (same code segment), and spes' passed TrustZone in the G1 test.
++ */
++static bool
++spes_fw(const char *key, void **data, size_t *size)
++{
++	IORegistryEntry *e = IORegistryEntry::fromPath("/arm-io/sweet-gpu", gIODTPlane);
++	if (e == NULL) {
++		return false;
++	}
++	OSData *d = OSDynamicCast(OSData, e->getProperty(key));
++	bool ok = d != NULL && d->getLength() > 0;
++	if (ok) {
++		*data = (void *)d->getBytesNoCopy();   /* device tree data lives as long as the kernel */
++		*size = d->getLength();
++	}
++	e->release();
++	return ok;
++}
++
+ static bool
+ zap_load(void)
+ {
+@@ -573,11 +612,15 @@ zap_load(void)
+ 	struct kbuf meta = {};
+ 	bool ok = false;
+ 
+-	IOLog("TopazGPU: zap: embedded firmware (%zu + %zu bytes)\n", topaz_fw_zap_mdt_size, topaz_fw_zap_b02_size);
+-	mdt = (void *)topaz_fw_zap_mdt;
+-	mdt_size = topaz_fw_zap_mdt_size;
+-	seg = (void *)topaz_fw_zap_b02;
+-	seg_size = topaz_fw_zap_b02_size;
++	if (spes_fw("zap-mdt", &mdt, &mdt_size) && spes_fw("zap-b02", &seg, &seg_size)) {
++		IOLog("TopazGPU: zap: the phone's firmware from the ADT (%zu + %zu bytes)\n", mdt_size, seg_size);
++	} else {
++		IOLog("TopazGPU: zap: embedded firmware (%zu + %zu bytes)\n", topaz_fw_zap_mdt_size, topaz_fw_zap_b02_size);
++		mdt = (void *)topaz_fw_zap_mdt;
++		mdt_size = topaz_fw_zap_mdt_size;
++		seg = (void *)topaz_fw_zap_b02;
++		seg_size = topaz_fw_zap_b02_size;
++	}
+ 	{
+ 		const uint8_t *m = (const uint8_t *)mdt;
+ 		uint32_t phoff = *(const uint32_t *)(m + 28), phnum = *(const uint16_t *)(m + 44);
+@@ -956,8 +999,10 @@ cp_start(void)
+ 	void *fw = NULL;
+ 	size_t fw_size = 0;
+ 
+-	fw = (void *)topaz_fw_sqe_fw;
+-	fw_size = topaz_fw_sqe_fw_size;
++	if (!spes_fw("sqe", &fw, &fw_size)) {
++		fw = (void *)topaz_fw_sqe_fw;
++		fw_size = topaz_fw_sqe_fw_size;
++	}
+ 	IOLog("TopazGPU: cp: SQE %zu bytes, allocating ring\n", fw_size);
+ 	if ((sqe.md == NULL && (!kbuf_alloc(&sqe, fw_size - 4) || !kbuf_map(&sqe))) ||
+ 	    (ring.md == NULL && (!kbuf_alloc(&ring, RB_BYTES) || !kbuf_map(&ring))) ||
+-- 
+2.52.0.windows.1
+

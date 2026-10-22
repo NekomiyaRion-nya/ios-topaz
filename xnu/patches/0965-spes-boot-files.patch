@@ -1,0 +1,230 @@
+From c95036ca8621f44442df7448668854c3ba1c7415 Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Fri, 23 Oct 2026 00:03:23 +0900
+Subject: [PATCH] spes-0965: install files the boot image carries
+ (/chosen/memory-map SweetFiles, mkpayload.py --files) into the root
+ filesystem before launchd: only missing or changed ones, parents made with a
+ kernel mkdir; sweetfiles=0 skips
+
+---
+ bsd/conf/files         |   1 +
+ bsd/dev/sweet_files.c  | 152 +++++++++++++++++++++++++++++++++++++++++
+ bsd/kern/bsd_init.c    |   5 ++
+ bsd/vfs/vfs_syscalls.c |  14 ++++
+ 4 files changed, 172 insertions(+)
+ create mode 100644 bsd/dev/sweet_files.c
+
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 231b885..9f60079 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -113,6 +113,7 @@ bsd/dev/sweet_sample.c			standard
+ bsd/dev/sweet_keys.c			standard
+ bsd/dev/sweet_touch.c			standard
+ bsd/dev/sweet_rpm.c			standard
++bsd/dev/sweet_files.c			standard
+ bsd/dev/sweet_i2c1.c			standard
+ bsd/dev/sweet_cpufreq.c			standard
+ bsd/dev/topaz_fw.c			standard
+diff --git a/bsd/dev/sweet_files.c b/bsd/dev/sweet_files.c
+new file mode 100644
+index 0000000..04e2022
+--- /dev/null
++++ b/bsd/dev/sweet_files.c
+@@ -0,0 +1,152 @@
++/*
++ * spes: files that the boot image carries for the iOS root filesystem (tools/mkpayload.py
++ * --files: the GPU's user space libraries and the like). bsd_init calls this once the root is
++ * mounted and before launchd starts; every file goes in through the filesystem (parent
++ * directories made as needed) and only when it is missing or different, so nothing has to be
++ * flashed into userdata and an unchanged file is never rewritten.
++ * The archive is at /chosen/memory-map "SweetFiles" = <phys, size>:
++ *   char magic[8] = "SWEETFIL"; u32 version = 1, count;
++ *   count x { u32 path_len (with NUL), u32 mode; u64 size; path, data (each padded to 8) }
++ * Boot-arg sweetfiles=0 skips it.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/errno.h>
++#include <sys/fcntl.h>
++#include <sys/vnode.h>
++#include <sys/vnode_internal.h>
++#include <sys/uio.h>
++#include <sys/kauth.h>
++#include <sys/proc.h>
++#include <kern/kalloc.h>
++#include <pexpert/pexpert.h>
++#include <pexpert/device_tree.h>
++
++extern uint64_t phystokv(uint64_t pa);                  /* osfmk/arm/pmap */
++extern int sweet_mkdir_kernel(const char *path, int mode); /* bsd/vfs/vfs_syscalls.c (spes) */
++void sweet_files_install(void);
++
++#define SF_CHUNK 65536u
++
++static bool
++sf_same(const char *path, const uint8_t *data, uint64_t size, vfs_context_t ctx, uint8_t *buf)
++{
++	vnode_t vp = NULLVP;
++	off_t cur = 0;
++	bool same;
++
++	if (vnode_open(path, FREAD, 0, 0, &vp, ctx) != 0) {
++		return false;
++	}
++	same = vnode_size(vp, &cur, ctx) == 0 && (uint64_t)cur == size;
++	for (uint64_t off = 0; same && off < size; off += SF_CHUNK) {
++		int n = (int)MIN((uint64_t)SF_CHUNK, size - off), resid = 0;
++		if (vn_rdwr(UIO_READ, vp, (caddr_t)buf, n, (off_t)off, UIO_SYSSPACE, IO_NODELOCKED,
++		    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx)) != 0 || resid != 0 ||
++		    memcmp(buf, data + off, (size_t)n) != 0) {
++			same = false;
++		}
++	}
++	vnode_close(vp, FREAD, ctx);
++	return same;
++}
++
++static void
++sf_parents(const char *path)
++{
++	char dir[256];
++	size_t len = strlen(path);
++	if (len >= sizeof(dir)) {
++		return;
++	}
++	for (size_t i = 1; i < len; i++) {
++		if (path[i] == '/') {
++			memcpy(dir, path, i);
++			dir[i] = 0;
++			(void)sweet_mkdir_kernel(dir, 0755);    /* EEXIST for the ones that are there */
++		}
++	}
++}
++
++static int
++sf_write(const char *path, uint32_t mode, const uint8_t *data, uint64_t size, vfs_context_t ctx)
++{
++	vnode_t vp = NULLVP;
++	int err;
++
++	sf_parents(path);
++	err = vnode_open(path, O_CREAT | O_TRUNC | FWRITE, (int)(mode & 07777), 0, &vp, ctx);
++	if (err != 0) {
++		return err;
++	}
++	for (uint64_t off = 0; err == 0 && off < size; off += SF_CHUNK) {
++		int n = (int)MIN((uint64_t)SF_CHUNK, size - off), resid = 0;
++		err = vn_rdwr(UIO_WRITE, vp, (caddr_t)(uintptr_t)(data + off), n, (off_t)off, UIO_SYSSPACE,
++		    IO_NODELOCKED | IO_SYNC, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
++		if (err == 0 && resid != 0) {
++			err = EIO;
++		}
++	}
++	(void)vnode_close(vp, FWRITE, ctx);
++	return err;
++}
++
++void
++sweet_files_install(void)
++{
++	DTEntry entry;
++	void const *prop = NULL;
++	unsigned int prop_size = 0;
++	uint32_t on = 1;
++
++	(void)PE_parse_boot_argn("sweetfiles", &on, sizeof(on));
++	if (!on || SecureDTLookupEntry(NULL, "/chosen/memory-map", &entry) != kSuccess ||
++	    SecureDTGetProperty(entry, "SweetFiles", &prop, &prop_size) != kSuccess || prop_size < 16) {
++		return;
++	}
++	uint64_t pa = ((const uint64_t *)prop)[0], len = ((const uint64_t *)prop)[1];
++	const uint8_t *base = (const uint8_t *)(uintptr_t)phystokv(pa), *end = base + len;
++	if (len < 16 || memcmp(base, "SWEETFIL", 8) != 0 || *(const uint32_t *)(base + 8) != 1) {
++		printf("SWEET FILES: bad archive at %#llx (%llu bytes)\n", pa, len);
++		return;
++	}
++	uint32_t count = *(const uint32_t *)(base + 12);
++	const uint8_t *p = base + 16;
++	vfs_context_t ctx = vfs_context_kernel();
++	uint8_t *buf = kalloc_data(SF_CHUNK, Z_WAITOK);
++	unsigned installed = 0, kept = 0, failed = 0;
++
++	for (uint32_t i = 0; i < count && buf != NULL; i++) {
++		if (end - p < 16) {
++			break;
++		}
++		uint32_t path_len = *(const uint32_t *)p, mode = *(const uint32_t *)(p + 4);
++		uint64_t size = *(const uint64_t *)(p + 8);
++		const char *path = (const char *)(p + 16);
++		const uint8_t *data = p + 16 + ((path_len + 7u) & ~7u);
++		if (path_len < 2 || path_len > 255 || path[path_len - 1] != 0 || path[0] != '/' ||
++		    (uint64_t)(end - data) < size) {
++			printf("SWEET FILES: entry %u malformed; stopping\n", i);
++			break;
++		}
++		p = data + ((size + 7u) & ~7ull);
++		if (sf_same(path, data, size, ctx, buf)) {
++			kept++;
++			continue;
++		}
++		int err = sf_write(path, mode, data, size, ctx);
++		printf("SWEET FILES: %s %s (%llu bytes, mode %o)\n", err ? "FAILED" : "installed", path, size, mode);
++		if (err) {
++			printf("SWEET FILES:   error %d\n", err);
++			failed++;
++		} else {
++			installed++;
++		}
++	}
++	if (buf != NULL) {
++		kfree_data(buf, SF_CHUNK);
++	}
++	printf("SWEET FILES: %u installed, %u unchanged, %u failed (of %u)\n", installed, kept, failed, count);
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index bb2a2bf..004af68 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -1098,6 +1098,11 @@ bsdinit_task(void)
+ 
+ 	bsd_init_kprintf("bsd_do_post - done");
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	/* spes: files the boot image carries for the root filesystem (bsd/dev/sweet_files.c) */
++	extern void sweet_files_install(void);
++	sweet_files_install();
++#endif
+ 	load_init_program(p);
+ 	lock_trace = 1;
+ }
+diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
+index 90e68bb..44361e1 100644
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -9831,6 +9831,20 @@ out:
+ 	return error;
+ }
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++/* spes: mkdir(2) from the kernel, for bsd/dev/sweet_files.c (absolute paths, kernel context) */
++int sweet_mkdir_kernel(const char *path, int mode);
++int
++sweet_mkdir_kernel(const char *path, int mode)
++{
++	struct vnode_attr va;
++
++	VATTR_INIT(&va);
++	VATTR_SET(&va, va_mode, mode & ACCESSPERMS);
++	return mkdir1at(vfs_context_kernel(), CAST_USER_ADDR_T(path), &va, AT_FDCWD, UIO_SYSSPACE);
++}
++#endif
++
+ /*
+  * mkdir_extended: Create a directory; with extended security (ACL).
+  *
+-- 
+2.52.0.windows.1
+

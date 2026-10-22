@@ -18,8 +18,13 @@ COMMON=${COMMON/cpus=CPUS/cpus=${AMP:+8}}; COMMON=${COMMON/cpus= /cpus=4 }
 SFX=${AMP:+-amp}
 mkdir -p shim/out
 python3 tools/mkadt.py shim/out/spes$SFX.adt --mem 0x80000000:0xc0000000 ${AMP:+--amp}
+# GPUFILES=DIR (userland/gpu/build-linux.sh: DIR/topaz/lib/*): the gpu images carry these files and the
+# kernel installs them into the iOS root before launchd (spes-0965)
+GPUFILES=${GPUFILES:-}
 build() {  # name cmdline
-	python3 tools/mkpayload.py "$K" shim/out/spes$SFX.adt shim/out/payload-$1$SFX.bin --cmdline "$2"
+	local files=()
+	[ -n "$GPUFILES" ] && [ "${1#gpu}" != "$1" ] && files=(--files "$GPUFILES")
+	python3 tools/mkpayload.py "$K" shim/out/spes$SFX.adt shim/out/payload-$1$SFX.bin --cmdline "$2" "${files[@]}"
 	bash shim/build.sh "$(pwd)/shim/out/payload-$1$SFX.bin" >/dev/null
 	cp shim/out/shim-boot.img shim/out/spes-$1$SFX.img
 }
@@ -31,6 +36,9 @@ build battery "$COMMON $AUTO sweettouch=0 sweetbattery=1"
 # touch with the FT3418 power sequence of 0162 (L9A on); step log to see each stage
 build touch "$COMMON $AUTO ufslogsecs=1 sweettouchdelay=20 sweettouchmode=1"
 build touchnol9a "$COMMON $AUTO ufslogsecs=1 sweettouchstep=300 sweettouchdelay=20 sweettouchl9a=0"
+# GPU: Adreno 610 via TopazAdreno/RedwoodGPU (kernel) + Mesa freedreno behind EAGL in backboardd (GPUFILES)
+GPUARGS="gpu=1 gpu_midmem=1 gpu_fbpool=0 topaz_inject=/topaz/lib/libtopaz-inject.dylib,backboardd"
+[ -n "$GPUFILES" ] && build gpu "$COMMON $AUTO sweettouchmode=1 $GPUARGS"
 # PROBE: extra boot-args for one investigation run (tools/spes-cycle.sh)
 build probe "$COMMON $AUTO sweettouch=0 ${PROBE:-}"
 build boot "$COMMON sweetfb_noconsole=1 sweettouchmode=1 sweethwwdt=20"   # boot_a/boot_b: everyday iOS with touch; tests ask it for fastboot over USB (UDP 5141)

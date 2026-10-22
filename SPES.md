@@ -111,3 +111,20 @@ boot_a/boot_b hold `spes-boot.img` (the iOS shim) since 2026-10-22, so a normal 
   kalloc_type signatures.
 - ABL refused `fastboot boot` with "Load Error" once current-slot had become b (slot b unbootable after the parked
   iOS never marks boot success): `fastboot set_active a` fixed it.
+
+## 2026-10-23 night: AMP and GPU prepared (not yet run on the phone)
+
+- **Local builds**: kernel `hackinOS/xnu-linux/build.sh` (~25 s incremental; `TOPAZ_4K=1` as a make arg, `FRESH=1`
+  when switching page size). GPU user space on Linux too: `userland/mesa/mk-mesa-linux.sh` (Mesa 25.0.7
+  freedreno+softpipe, clang-17 + ld64.lld + theos iPhoneOS16.5.sdk, ad-hoc signed) and `userland/gpu/build-linux.sh`
+  (libtopaz-gl = eagl.c + gl_osmesa.c, libtopaz-inject = topaz_inject.c; mkeagl.py/eagl_slots.txt from HackiOS).
+- **AMP** (`AMP=1 K=<TOPAZ_4K kernel> tools/mkspes-boot.sh` -> `spes-*-amp.img`): `mkadt.py --amp` (gold P 0x100-0x103
+  first, silver E 0x0-0x3), cpus=8, shim prepares the silver GICRs and powers the silver boot CPU off (PSCI CPU_OFF)
+  once gold runs so xnu can CPU_ON it.
+- **GPU** (`GPUFILES=/root/gpu-ul/files ... tools/mkspes-boot.sh` -> `spes-gpu.img`): 0964 loads zap/SQE from the
+  ADT (spes' own, the embedded topaz zap mdt differs) and refuses topaz's 0x90000000 pool (kernel RAM on spes);
+  boot-args `gpu=1 gpu_midmem=1 gpu_fbpool=0 topaz_inject=/topaz/lib/libtopaz-inject.dylib,backboardd`.
+  0965 + `mkpayload.py --files`: the boot image carries /topaz/lib/* and the kernel installs them into the iOS root
+  before launchd (only when changed) - no userdata flash needed.
+- Night of 10-22/23: after flashing the touch-enabled everyday image to boot_a/b (23:55, CI kernel 0962) the phone
+  did not show up on USB again (no fastboot, no USB Ethernet); needs a look in the morning.
