@@ -59,8 +59,17 @@ Symbolicate samples with `tools/a2s.sh SLIDE ADDR...`, disassemble with `tools/d
 | 0145 | `sweethwwdt=SECS`: APSS watchdog (0xf017000) petted every second; a hang bites into fastboot |
 | 0146 | MAX77729 battery readout |
 | 0147 | FT3418 touch IC |
+| 0148-0150 | USB (DWC3 0x4e00000, GCC 0x1400000) for the CDC-ECM live log |
+| 0151-0157 | Touch hang bisection: DFS level dump, `sweettouchtest` bits, per-register transfer trace |
+| 0158/0159 | `SWEET-FASTBOOT` UDP datagram (port 5141, USB Ethernet) reboots into fastboot |
+| 0160/0161 | `SweetGPU.cpp`: Adreno 610 G1 test (`sweetgpu=1`): power, zap via TZ PAS 13 into gpu_region 0x56615000, SMMU CB0 pass-through, SQE + CP_ME_INIT, CP_MEM_WRITE 0xC0FFEE00 readback. Firmware from the spes vendor partition in `/arm-io/sweet-gpu` |
 
 boot_a/boot_b hold `spes-boot.img` (the iOS shim) since 2026-10-22, so a normal boot never reaches Android again.
 - 2026-10-22: USB works (0148-0150): `ue0` 192.168.7.2 up, Windows enumerates "Sweet iOS (USB Ethernet)" (1209:0001).
   Host side: usbipd-win (AutoBind policy for 1209:0001) + `tools/usb-attach.sh` (Git Bash) + `tools/livelog.sh` (WSL root)
   -> `logs/live.txt`. Touch hangs at the first I2C transfer ("step probe"); 0151 dumps the SE2 DFS table and picks an XO level.
+- 2026-10-22 touch: the SoC freezes after the first SE2 I2C transfer completes (FT3418 at 0x38 NACKs). The transfer
+  itself is harmless (2 s alive with SE2 untouched) and all SE2 registers read fine afterwards; GIC SPI 361 (SE2)
+  reads as Group 0 / RAZ from the non-secure side. Next: trace the NACK/abort paths (0157, image `spes-tt17.img`).
+- ABL fastboot drops off USB after a few idle minutes: the test loop now parks the phone in iOS and asks for fastboot
+  over UDP (`tools/phone-fastboot.sh`).
