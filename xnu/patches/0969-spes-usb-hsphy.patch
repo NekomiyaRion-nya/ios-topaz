@@ -1,0 +1,130 @@
+From b8aedd7e0c01bfa0ccb7195fe77aef739a00f0e6 Mon Sep 17 00:00:00 2001
+From: matsu <covocovo893@gmail.com>
+Date: Fri, 23 Oct 2026 08:29:12 +0900
+Subject: [PATCH] spes-0969: USB from a normal boot: when the DWC3's first
+ endpoint command times out, bring up the HS PHY as phy-msm-snps-hs.c does
+ (RPM L4A/L12A/L15A, QUSB2PHY_PRIM_BCR reset, femto PHY sequence with the spes
+ parameter overrides) and try once more
+
+---
+ bsd/dev/sweet_usb.c | 84 ++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 83 insertions(+), 1 deletion(-)
+
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index abc5c7a..5840e3b 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -825,12 +825,86 @@ ud_log_thread(void *arg __unused, wait_result_t wr __unused)
+ 	}
+ }
+ 
++/*
++ * spes: the HS PHY (Synopsys femto, hsphy@1613000) as Linux's phy-msm-snps-hs.c msm_hsphy_init
++ * brings it up. `fastboot boot` finds it running (ABL's fastboot used it); a normal boot from
++ * boot_a/boot_b does not, and the DWC3 then times out on its first endpoint command. Its supplies
++ * are RPM regulators (vdd L4A 0.88 V, vdda18 L12A 1.8 V, vdda33 L15A 3.08 V), its reset is GCC
++ * QUSB2PHY_PRIM_BCR (0x1c000), the parameter overrides are the spes DT's qcom,param-override-seq.
++ */
++#define HSPHY_PA                0x01613000
++#define HSPHY_UTMI_CTRL0        0x3c    /* SLEEPM bit 0 */
++#define HSPHY_UTMI_CTRL5        0x50    /* POR bit 1 */
++#define HSPHY_COMMON0           0x54    /* FSEL 6:4 */
++#define HSPHY_COMMON1           0x58    /* VBUSVLDEXTSEL0 bit 4, PLLBTUNE bit 5 */
++#define HSPHY_COMMON2           0x5c    /* VREGBYPASS bit 0 */
++#define HSPHY_CTRL1             0x60    /* VBUSVLDEXT0 bit 0 */
++#define HSPHY_CTRL2             0x64    /* SUSPEND_N bit 2, SUSPEND_N_SEL bit 3 */
++#define HSPHY_CFG0              0x94    /* UTMI_PHY_CMN_CTRL_OVERRIDE_EN bit 1 */
++#define HSPHY_REFCLK_CTRL       0xa0    /* REFCLK_SEL 1:0 = 2 */
++#define GCC_QUSB2PHY_PRIM_BCR   0x1c000
++
++extern int sweet_rpm_ldoa(unsigned id, unsigned uv, bool on);   /* sweet_rpm.c (spes) */
++
++static void
++hsphy_rmw(vm_offset_t b, uint32_t off, uint32_t mask, uint32_t val)
++{
++	uint32_t v = usb_rd(b, off);
++	*(volatile uint32_t *)(b + off) = (v & ~mask) | (val & mask);
++	__asm__ volatile ("dsb sy" ::: "memory");
++	(void)usb_rd(b, off);
++}
++
++static bool
++sweet_usb_hsphy_init(void)
++{
++	vm_offset_t gcc = ml_io_map(GCC_PA, GCC_SIZE), phy = ml_io_map(HSPHY_PA, 0x1000);
++	if (gcc == 0 || phy == 0) {
++		return false;
++	}
++	int e4 = sweet_rpm_ldoa(4, 880000, true);
++	int e12 = sweet_rpm_ldoa(12, 1800000, true);
++	int e15 = sweet_rpm_ldoa(15, 3080000, true);
++	delay(1000);
++	*(volatile uint32_t *)(gcc + GCC_QUSB2PHY_PRIM_BCR) = 1;
++	__asm__ volatile ("dsb sy" ::: "memory");
++	delay(100);
++	*(volatile uint32_t *)(gcc + GCC_QUSB2PHY_PRIM_BCR) = 0;
++	__asm__ volatile ("dsb sy" ::: "memory");
++	delay(100);
++	hsphy_rmw(phy, HSPHY_CFG0, 1u << 1, 1u << 1);
++	hsphy_rmw(phy, HSPHY_UTMI_CTRL5, 1u << 1, 1u << 1);
++	hsphy_rmw(phy, HSPHY_COMMON0, 7u << 4, 0);
++	hsphy_rmw(phy, HSPHY_COMMON1, 1u << 5, 1u << 5);
++	hsphy_rmw(phy, HSPHY_REFCLK_CTRL, 3u, 2u);
++	hsphy_rmw(phy, HSPHY_COMMON1, 1u << 4, 1u << 4);
++	hsphy_rmw(phy, HSPHY_CTRL1, 1u << 0, 1u << 0);
++	static const uint32_t seq[] = { 0x61, 0x6c, 0x08, 0x70, 0x2d, 0x74 };
++	for (unsigned i = 0; i + 1 < sizeof(seq) / sizeof(seq[0]); i += 2) {
++		*(volatile uint32_t *)(phy + seq[i + 1]) = seq[i];
++	}
++	__asm__ volatile ("dsb sy" ::: "memory");
++	hsphy_rmw(phy, HSPHY_COMMON2, 1u << 0, 1u << 0);
++	hsphy_rmw(phy, HSPHY_CTRL2, (1u << 3) | (1u << 2), (1u << 3) | (1u << 2));
++	hsphy_rmw(phy, HSPHY_UTMI_CTRL0, 1u << 0, 1u << 0);
++	hsphy_rmw(phy, HSPHY_UTMI_CTRL5, 1u << 1, 0);
++	hsphy_rmw(phy, HSPHY_CTRL2, 1u << 3, 0);
++	hsphy_rmw(phy, HSPHY_CFG0, 1u << 1, 0);
++	delay(1000);
++	printf("SWEET USB: HS PHY initialized (rpm l4 %d l12 %d l15 %d), COMMON0 0x%08x CTRL2 0x%08x UTMI_CTRL5 0x%08x\n",
++	    e4, e12, e15, usb_rd(phy, HSPHY_COMMON0), usb_rd(phy, HSPHY_CTRL2), usb_rd(phy, HSPHY_UTMI_CTRL5));
++	return true;
++}
++
+ static void
+ sweet_usb_gadget_start(vm_offset_t dwc)
+ {
+ 	thread_t thread;
+ 
+ 	ud.dwc = dwc;
++	if (ud.dma != 0) {
++		goto reset;     /* spes: second attempt after the PHY bring-up */
++	}
+ 	if (kmem_alloc_contig(kernel_map, &ud.dma, UD_SIZE, PAGE_MASK, 0, 0,
+ 	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
+ 		printf("SWEET USB: no DMA memory\n");
+@@ -843,6 +917,7 @@ sweet_usb_gadget_start(vm_offset_t dwc)
+ 	ud.dma_pa = ptoa_64(pn);
+ 	ud_if_create();
+ 
++reset:
+ 	/* Device controller soft reset (PHY and global setup stay as ABL left them). */
+ 	dwc_wr(DCTL, DCTL_CSFTRST);
+ 	int i;
+@@ -873,7 +948,14 @@ sweet_usb_gadget_start(vm_offset_t dwc)
+ 	    ud_epcmd(0, DEPCMD_SETTRANSFRESOURCE, 1, 0, 0) ||
+ 	    ud_epcmd(1, DEPCMD_SETEPCONFIG, (0u << 1) | (512u << 3), (1u << 8) | (1u << 10) | (1u << 25), 0) ||
+ 	    ud_epcmd(1, DEPCMD_SETTRANSFRESOURCE, 1, 0, 0)) {
+-		printf("SWEET USB: endpoint 0 setup failed\n");
++		static bool retried;
++		if (retried || !sweet_usb_hsphy_init()) {
++			printf("SWEET USB: endpoint 0 setup failed\n");
++			return;
++		}
++		retried = true;
++		printf("SWEET USB: endpoint 0 setup failed: PHY brought up, trying again\n");
++		sweet_usb_gadget_start(dwc);
+ 		return;
+ 	}
+ 	dwc_wr(DALEPENA, 0x3);
+-- 
+2.52.0.windows.1
+

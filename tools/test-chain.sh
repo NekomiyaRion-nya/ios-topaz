@@ -16,10 +16,14 @@ for job in "$@"; do
 	name=${job%%:*} img=${job#*:}
 	[ "$img" = - ] || img="$HACK/ios-spes/shim/out/$img"
 	log "=== $name"
+	if [ "$name" = flashboot ]; then   # flashboot:IMAGE -> boot_a and boot_b (the everyday iOS)
+		for slot in a b; do "$PT/fastboot.exe" flash boot_$slot "$(cygpath -w "$img")" 2>&1 | grep -a "Writing\|FAILED"; done
+		continue
+	fi
 	if [ "$img" = - ]; then
 		PULL=1 PARK=0 bash "$HACK/tools/spes-cycle.sh" - "$name" 600
 	else
-		PARK=0 bash "$HACK/tools/spes-cycle.sh" "$img" "$name" 420
+		PARK=0 bash "$HACK/tools/spes-cycle.sh" "$img" "$name" 420   # PULL=1 in the environment: always the UFS log too
 	fi
 	rc=$?
 	log "$name finished rc=$rc"

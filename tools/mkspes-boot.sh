@@ -43,5 +43,5 @@ GPUARGS="gpu=1 gpu_midmem=1 gpu_contig=0 topaz_inject=/topaz/lib/libtopaz-inject
 build wifi "$COMMON $AUTO sweettouchmode=1 modem=1 wifi=1"
 # PROBE: extra boot-args for one investigation run (tools/spes-cycle.sh)
 build probe "$COMMON $AUTO sweettouch=0 ${PROBE:-}"
-build boot "$COMMON sweetfb_noconsole=1 sweettouchmode=1 sweethwwdt=20"   # boot_a/boot_b: everyday iOS with touch; tests ask it for fastboot over USB (UDP 5141)
+build boot "$COMMON sweetfb_noconsole=1 sweettouchmode=1 modem=1 wifi=1 sweethwwdt=20"   # boot_a/boot_b: everyday iOS with touch; tests ask it for fastboot over USB (UDP 5141)
 ls -l shim/out/spes-*.img
