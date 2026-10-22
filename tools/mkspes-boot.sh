@@ -39,6 +39,8 @@ build touchnol9a "$COMMON $AUTO ufslogsecs=1 sweettouchstep=300 sweettouchdelay=
 # GPU: Adreno 610 via TopazAdreno/RedwoodGPU (kernel) + Mesa freedreno behind EAGL in backboardd (GPUFILES)
 GPUARGS="gpu=1 gpu_midmem=1 gpu_fbpool=0 topaz_inject=/topaz/lib/libtopaz-inject.dylib,backboardd"
 [ -n "$GPUFILES" ] && build gpu "$COMMON $AUTO sweettouchmode=1 $GPUARGS"
+# Wi-Fi: TopazModem boots the modem from modem_a through TrustZone (spes tables, 0966), wifid through Apple80211 glue
+build wifi "$COMMON $AUTO sweettouchmode=1 modem=1 wifi=1"
 # PROBE: extra boot-args for one investigation run (tools/spes-cycle.sh)
 build probe "$COMMON $AUTO sweettouch=0 ${PROBE:-}"
 build boot "$COMMON sweetfb_noconsole=1 sweettouchmode=1 sweethwwdt=20"   # boot_a/boot_b: everyday iOS with touch; tests ask it for fastboot over USB (UDP 5141)
