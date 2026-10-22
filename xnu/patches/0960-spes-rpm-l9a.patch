@@ -1,7 +1,7 @@
 From dfcd22bede06ccce73799efeb6eec3bdbacdd0d8 Mon Sep 17 00:00:00 2001
 From: matsu <covocovo893@gmail.com>
 Date: Thu, 22 Oct 2026 21:24:40 +0900
-Subject: [PATCH] spes-0163: L9A through the RPM: minimal polled GLINK (RPM
+Subject: [PATCH] spes-0960: L9A through the RPM: minimal polled GLINK (RPM
  message RAM) + SMD RPM client (sweet_rpm.c), ldoa9 1.8 V in the active and
  sleep sets; list the SID 0 regulator PPIDs APPS can see
 

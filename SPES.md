@@ -61,6 +61,7 @@ Symbolicate samples with `tools/a2s.sh SLIDE ADDR...`, disassemble with `tools/d
 | 0147 | FT3418 touch IC |
 | 0148-0150 | USB (DWC3 0x4e00000, GCC 0x1400000) for the CDC-ECM live log |
 | 0151-0157 | Touch hang bisection: DFS level dump, `sweettouchtest` bits, per-register transfer trace |
+| 0960 | L9A through the RPM: polled GLINK (RPM message RAM) + SMD RPM client `sweet_rpm.c` (ldoa9 1.8 V, active + sleep set). New spes patches go after topaz 09xx (0960+): patches apply in name order and must match the tree they were made on |
 | 0162 | FT3418 power as the Xiaomi `ft3418_i2c` driver: reset low, AVDD GPIO98, **vcc_i2c = PM6125 L9A enabled over SPMI** (SID0 0x4800 EN_CTL, only if VSET is 1.7-1.95 V; `sweettouchl9a=0` skips), chip id retried ~1 s |
 | 0158/0159 | `SWEET-FASTBOOT` UDP datagram (port 5141, USB Ethernet) reboots into fastboot |
 | 0160/0161 | (removed at the topaz merge, superseded by upstream TopazAdreno) `SweetGPU.cpp`: Adreno 610 G1 test (`sweetgpu=1`): power, zap via TZ PAS 13 into gpu_region 0x56615000, SMMU CB0 pass-through, SQE + CP_ME_INIT, CP_MEM_WRITE 0xC0FFEE00 readback. Firmware from the spes vendor partition in `/arm-io/sweet-gpu` |
