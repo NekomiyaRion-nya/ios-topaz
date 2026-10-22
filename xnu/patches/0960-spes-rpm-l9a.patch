@@ -1,16 +1,17 @@
-From dfcd22bede06ccce73799efeb6eec3bdbacdd0d8 Mon Sep 17 00:00:00 2001
+From 96f68653c5f5bebe686c703825f2e7c1ba3274b5 Mon Sep 17 00:00:00 2001
 From: matsu <covocovo893@gmail.com>
-Date: Thu, 22 Oct 2026 21:24:40 +0900
+Date: Thu, 22 Oct 2026 22:39:50 +0900
 Subject: [PATCH] spes-0960: L9A through the RPM: minimal polled GLINK (RPM
  message RAM) + SMD RPM client (sweet_rpm.c), ldoa9 1.8 V in the active and
- sleep sets; list the SID 0 regulator PPIDs APPS can see
+ sleep sets; list the SID 0 regulator PPIDs APPS can see. Pipes start from 0
+ as in glink_rpm_probe; each step logged with 300 ms for the USB live log
 
 ---
  bsd/conf/files        |   1 +
  bsd/dev/sweet_keys.c  |   9 +
- bsd/dev/sweet_rpm.c   | 446 ++++++++++++++++++++++++++++++++++++++++++
+ bsd/dev/sweet_rpm.c   | 462 ++++++++++++++++++++++++++++++++++++++++++
  bsd/dev/sweet_touch.c |   9 +-
- 4 files changed, 463 insertions(+), 2 deletions(-)
+ 4 files changed, 479 insertions(+), 2 deletions(-)
  create mode 100644 bsd/dev/sweet_rpm.c
 
 diff --git a/bsd/conf/files b/bsd/conf/files
@@ -47,10 +48,10 @@ index be78055..73dde38 100644
  		return false;
 diff --git a/bsd/dev/sweet_rpm.c b/bsd/dev/sweet_rpm.c
 new file mode 100644
-index 0000000..e0456c6
+index 0000000..f8ea0f2
 --- /dev/null
 +++ b/bsd/dev/sweet_rpm.c
-@@ -0,0 +1,446 @@
+@@ -0,0 +1,462 @@
 +/*
 + * spes (SM6225 khaje): a minimal RPM client, polled, for one request at a
 + * time: GLINK over the RPM message RAM (Linux qcom_glink_rpm.c and
@@ -126,6 +127,14 @@ index 0000000..e0456c6
 +{
 +	__asm__ volatile("dmb oshst" ::: "memory");
 +	*(volatile uint32_t *)(rpm.ram + off) = v;
++}
++
++/* spes: each step is logged and given 300 ms, so the USB live log shows the last one before a reset */
++static void
++rpm_step(const char *what)
++{
++	printf("SWEET RPM: %s\n", what);
++	delay(300000);
 +}
 +
 +static void
@@ -387,8 +396,14 @@ index 0000000..e0456c6
 +		printf("SWEET RPM: rx tail=%#x head=%#x tx tail=%#x head=%#x\n",
 +		    rpm_rd(rpm.rx_off), rpm_rd(rpm.rx_off + 4u), rpm_rd(rpm.tx_off), rpm_rd(rpm.tx_off + 4u));
 +		rpm.mapped = true;
++		/* glink_rpm_probe: start both directions from 0 (ABL leaves its own positions) */
++		rpm_wr(rpm.tx_off + 4u, 0);
++		rpm_wr(rpm.rx_off, 0);
++		__asm__ volatile("dsb osh" ::: "memory");
++		rpm_step("pipes reset");
 +	}
 +	if (!rpm.up) {
++		rpm_step("sending VERSION");
 +		if (!rpm_tx_cmd(CMD_VERSION, 1, 0) || !rpm_wait(&rpm.up, 1000)) {
 +			printf("SWEET RPM: no VERSION_ACK\n");
 +			return false;
@@ -402,6 +417,7 @@ index 0000000..e0456c6
 +	open.msg[0] = CMD_OPEN | (RPM_LCID << 16);
 +	open.msg[1] = sizeof(RPM_CHANNEL);
 +	memcpy(open.name, RPM_CHANNEL, sizeof(RPM_CHANNEL));
++	rpm_step("sending OPEN rpm_requests");
 +	if (!rpm_tx(&open, 8u + ((sizeof(RPM_CHANNEL) + 3u) & ~3u), NULL, 0) ||
 +	    !rpm_wait(&rpm.opened, 1000)) {
 +		printf("SWEET RPM: no OPEN_ACK\n");
@@ -444,6 +460,7 @@ index 0000000..e0456c6
 +	hdr.msg[1] = 0;                 /* intentless: no intent id */
 +	hdr.chunk = len;
 +	hdr.left = 0;
++	rpm_step(set ? "sending ldoa request (sleep set)" : "sending ldoa request (active set)");
 +	rpm.got_resp = false;
 +	if (!rpm_tx(&hdr, sizeof(hdr), &req, len) || !rpm_wait(&rpm.got_resp, 1000)) {
 +		printf("SWEET RPM: no answer to request %u\n", req.msg_id);
