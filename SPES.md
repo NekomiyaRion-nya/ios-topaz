@@ -61,8 +61,9 @@ Symbolicate samples with `tools/a2s.sh SLIDE ADDR...`, disassemble with `tools/d
 | 0147 | FT3418 touch IC |
 | 0148-0150 | USB (DWC3 0x4e00000, GCC 0x1400000) for the CDC-ECM live log |
 | 0151-0157 | Touch hang bisection: DFS level dump, `sweettouchtest` bits, per-register transfer trace |
+| 0162 | FT3418 power as the Xiaomi `ft3418_i2c` driver: reset low, AVDD GPIO98, **vcc_i2c = PM6125 L9A enabled over SPMI** (SID0 0x4800 EN_CTL, only if VSET is 1.7-1.95 V; `sweettouchl9a=0` skips), chip id retried ~1 s |
 | 0158/0159 | `SWEET-FASTBOOT` UDP datagram (port 5141, USB Ethernet) reboots into fastboot |
-| 0160/0161 | `SweetGPU.cpp`: Adreno 610 G1 test (`sweetgpu=1`): power, zap via TZ PAS 13 into gpu_region 0x56615000, SMMU CB0 pass-through, SQE + CP_ME_INIT, CP_MEM_WRITE 0xC0FFEE00 readback. Firmware from the spes vendor partition in `/arm-io/sweet-gpu` |
+| 0160/0161 | (removed at the topaz merge, superseded by upstream TopazAdreno) `SweetGPU.cpp`: Adreno 610 G1 test (`sweetgpu=1`): power, zap via TZ PAS 13 into gpu_region 0x56615000, SMMU CB0 pass-through, SQE + CP_ME_INIT, CP_MEM_WRITE 0xC0FFEE00 readback. Firmware from the spes vendor partition in `/arm-io/sweet-gpu` |
 
 boot_a/boot_b hold `spes-boot.img` (the iOS shim) since 2026-10-22, so a normal boot never reaches Android again.
 - 2026-10-22: USB works (0148-0150): `ue0` 192.168.7.2 up, Windows enumerates "Sweet iOS (USB Ethernet)" (1209:0001).
@@ -84,3 +85,14 @@ boot_a/boot_b hold `spes-boot.img` (the iOS shim) since 2026-10-22, so a normal 
   Possible: a synchronous/SError abort -> XNU panic whose text is never flushed (no panic hook writes the
   UFS log). Next: a panic hook that flushes the log (or sends it over the USB live log) before hanging.
   Upstream topaz touch (same SoC, same driver, FT5452) works; no touch changes upstream since the fork.
+
+## 2026-10-22: upstream topaz merged; the touch "freeze" was a deliberate panic
+
+- Merged upstream ios-topaz `fe7625f` (HackiOS-derived GPU via Mesa, AMP/4K pages behind `TOPAZ_4K=1`, audio,
+  charger limits, Wi-Fi glue). GPU/audio/modem/Wi-Fi are off unless `gpu=1`/`adsp=1`/`modem=1`/`wifi=1`;
+  spes images pass `sweetchg=0`. The GPU userland (eagl + Mesa freedreno) is not built yet (needs a Mac or CI).
+- Touch: every test image had `sweettouchdiag=1`, which **panics on purpose** when the probe finds no supported IC
+  (topaz diag). The probe always failed (FT3418 NACKs at 0x38), the panic text only went to the screen, the last
+  second of the log was never flushed, and `sweethwwdt` brought the phone back: that was the "SoC freeze".
+  GENI SE2 itself works (clean NACKs). Real problem: the IC does not answer -> its vcc_i2c (L9A, used otherwise
+  only by BT IO and the codec) is off after ABL. 0162 turns it on. Images: `spes-touch.img` / `spes-touchnol9a.img`.

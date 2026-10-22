@@ -7,7 +7,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 K=xnu/out/kernel.development.sweet
-COMMON='debug=0xc serial=3 cpus=4 keepsyms=1 -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_hz=30 sweettouchdiag=1 sweetusb=2'
+COMMON='debug=0xc serial=3 cpus=4 keepsyms=1 -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_hz=30 sweetusb=2 sweetchg=0'
+# sweettouchdiag=1 is not in COMMON: when the probe finds no IC it panics on purpose, the panic is
+# only drawn on screen and the unflushed log looked like a SoC freeze (2026-10-22).
+# sweetchg=0: topaz charger limits (topaz-0148) stay off until checked on spes.
 # test images reset into fastboot after AUTOREBOOT s (tools/spes-cycle.sh pulls the log)
 AUTO="sweetautoreboot=${AUTOREBOOT:-360} sweethwwdt=${HWWDT:-20}"
 mkdir -p shim/out
@@ -22,10 +25,9 @@ build notouch "$COMMON $AUTO sweettouch=0 sweetsample=SpringBoard,lsd,backboardd
 build touchstep "$COMMON $AUTO ufslogsecs=1 sweettouchstep=1500 sweettouchdelay=20"
 build usb "$COMMON $AUTO sweettouch=0 sweetusb=2"
 build battery "$COMMON $AUTO sweettouch=0 sweetbattery=1"
-for t in 1 2 4 8 15 17 29 49 51 81 209; do   # touch probe-hang bisection (0152)
-	build tt$t "$COMMON $AUTO ufslogsecs=1 sweettouchstep=500 sweettouchdelay=20 sweettouchtest=$t"
-done
-build gpu "$COMMON $AUTO sweettouch=0 sweetgpu=1 sweetgpudelay=40"   # Adreno 610 G1 test (0160)
+# touch with the FT3418 power sequence of 0162 (L9A on); step log to see each stage
+build touch "$COMMON $AUTO ufslogsecs=1 sweettouchstep=300 sweettouchdelay=20"
+build touchnol9a "$COMMON $AUTO ufslogsecs=1 sweettouchstep=300 sweettouchdelay=20 sweettouchl9a=0"
 # PROBE: extra boot-args for one investigation run (tools/spes-cycle.sh)
 build probe "$COMMON $AUTO sweettouch=0 ${PROBE:-}"
 build boot "$COMMON sweetfb_noconsole=1 sweettouch=0 sweetautoreboot=900 sweethwwdt=20"   # parked between test cycles: back to fastboot after 15 min
